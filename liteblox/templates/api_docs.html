@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>API · LiteBlox</title>
+  {% if has_asset('favicon.svg') %}<link rel="icon" href="{{ asset('favicon.svg') }}">{% endif %}
+  <link rel="stylesheet" href="{{ asset('vendor/swagger-ui.css') }}">
+  <script src="{{ asset('topbar.js') }}"></script>{# not deferred: the saved theme applies before the first paint #}
+  <style>
+    /* the app's top bar without app.css, whose element styles would restyle Swagger */
+    :root { --bg: #fafafa; --surface: #fff; --text: #1c2330; --muted: #5d6878; --border: #d9dee6; --accent: #2563eb;
+            --ok: #2f9e5a; --warn: #d4a017; --error-text: #9b1c1c; }
+    /* dark: Auto follows the system unless the toggle says light; Dark always (as in app.css) */
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) { --bg: #12161d; --surface: #1b2029; --text: #e4e8ee; --muted: #97a1b0; --border: #2d3440; --accent: #5b8def; --error-text: #f4a9a9; color-scheme: dark; }
+      /* Swagger has no dark theme: invert it, and turn the colours back round */
+      :root:not([data-theme="light"]) #swagger-ui { filter: invert(.88) hue-rotate(180deg); }
+    }
+    :root[data-theme="dark"] { --bg: #12161d; --surface: #1b2029; --text: #e4e8ee; --muted: #97a1b0; --border: #2d3440; --accent: #5b8def; --error-text: #f4a9a9; color-scheme: dark; }
+    :root[data-theme="dark"] #swagger-ui { filter: invert(.88) hue-rotate(180deg); }
+    body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
+    #swagger-ui { background: #fafafa; }
+    .topbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px; padding: 10px 16px; background: var(--surface);
+              border-bottom: 1px solid var(--border); font-size: 16px; }
+    .topbar a { color: var(--accent); }
+    .brand { font-weight: 700; color: var(--text) !important; text-decoration: none; }
+    .topbar nav { display: flex; flex-wrap: wrap; gap: 16px; flex: 1; }
+    .topbar nav a { color: var(--muted); text-decoration: none; }
+    .who { display: flex; align-items: center; gap: 12px; }
+    .who form { margin: 0; }
+    .topbar .search { margin: 0; }
+    .topbar .search input { width: 14rem; padding: 4px 8px; font: inherit; font-size: 14px; border: 1px solid var(--border); border-radius: 6px; }
+    .who button { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
+    .badge { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--border); margin-right: 5px; }
+    .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.error { background: var(--error-text); }
+    .nav-menu { position: relative; }
+    .nav-menu summary { color: var(--muted); list-style: none; cursor: pointer; white-space: nowrap; }
+    .nav-menu summary::-webkit-details-marker { display: none; }
+    .nav-menu summary::after { content: ' ▾'; font-size: 11px; }
+    .nav-menu-panel { position: absolute; top: calc(100% + 8px); left: -10px; z-index: 50; display: grid; min-width: 12rem; padding: 6px;
+                      background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 20px rgb(0 0 0 / .18); }
+    .topbar nav .nav-menu-panel a { color: var(--text); padding: 6px 10px; border-radius: 6px; white-space: nowrap; }
+    .topbar nav .nav-menu-panel a:hover { background: var(--bg); }
+    .theme-toggle { display: inline-flex; align-items: center; color: var(--muted) !important; padding: 2px !important; }
+    .theme-toggle svg { width: 18px; height: 18px; display: none; }
+    .theme-toggle[data-theme-choice="auto"] .t-auto, .theme-toggle[data-theme-choice="light"] .t-light,
+    .theme-toggle[data-theme-choice="dark"] .t-dark { display: block; }
+    @media (max-width: 640px) {
+      .topbar nav { position: relative; }
+      .nav-menu { position: static; }
+      .nav-menu-panel { left: 0; right: 0; }
+    }
+    .api-links { display: flex; flex-wrap: wrap; gap: 16px; padding: 10px 16px; font-size: 14px; }
+    .api-links a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  {% include 'partials/topbar.html' %}
+  <div class="api-links"><strong>API</strong> <a href="/account#tokens">My API tokens</a> <a href="/help/api">How the API works</a> <a href="/static/lbcli.py" download>lbcli.py</a></div>
+  <div id="swagger-ui"></div>
+  <script src="{{ asset('vendor/swagger-ui-bundle.js') }}"></script>
+  <script src="{{ asset('api-docs.js') }}"></script>
+</body>
+</html>

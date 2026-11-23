@@ -1,0 +1,43 @@
+{% from 'partials/diff.html' import diff %}
+<section class="card form-card spaced review">
+  <h2>Review</h2>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>
+  {% else %}
+  {% for r in results %}
+  <h3>{{ r.node.name }}</h3>
+  {% for p in r.problems %}<p class="error">{{ p }}</p>{% endfor %}
+  {% for n in r.notes or [] %}<p class="notice">{{ n }}</p>{% endfor %}
+  {% if r.diff %}{{ diff(r.diff) }}
+    {% if not r.problems %}<p class="muted small">✓ Kea on {{ r.node.name }} accepts it (<code>kea-dhcp4 -t</code>).</p>{% endif %}
+  {% elif not r.problems %}<p class="muted small">No change on {{ r.node.name }}.</p>{% endif %}
+  {% else %}<p class="muted">No node runs Kea yet: set DHCP up on a node first (its page → DHCP).</p>
+  {% endfor %}
+  {% if ddns %}
+  <h3>DNS registration</h3>
+  {% if granted %}<p class="notice small">✓ Key <code>{{ ddns.key }}</code> may now register these names (<a href="/jobs/{{ granted }}">job #{{ granted }}</a>).</p>{% endif %}
+  {% if ddns.external %}
+  <p class="small">Clients become <code>host.{{ ddns.suffix }}</code>, their PTRs go in {% for z in ddns.reverse %}<code>{{ z }}</code>{% if not loop.last %}, {% endif %}{% endfor %}. Updates go to <code>{{ ddns.primary }}</code>, signed with key <code>{{ ddns.key or '?' }}</code>.</p>
+  {% if ddns.test is not none %}<ul class="plain small ddns-test">{% for r in ddns.test %}<li><span class="dot {{ 'ok' if r.ok else 'warn' }}" aria-hidden="true"></span><code>{{ r.zone }}</code>: {{ r.text }}</li>{% endfor %}</ul>
+  <p class="muted small">Asked just now with a signed SOA query. Whether that server lets the key update these names is up to its own policy (BIND: <code>update-policy</code>).</p>{% endif %}
+  {% else %}
+  <p class="small">Clients become <code>host.{{ ddns.suffix }}</code> in <code>{{ ddns.zone }}</code>{% if ddns.reverse %}, their PTRs go in {% for z in ddns.reverse %}<code>{{ z }}</code>{% if not loop.last %}, {% endif %}{% endfor %}{% else %}; <span class="notice">no dynamic reverse zone covers this subnet, so only the names are registered</span>{% endif %}.
+    Updates go to the DNS primary{% if ddns.primary %} (<code>{{ ddns.primary }}</code>){% endif %}, signed with key <code>{{ ddns.key or '?' }}</code>.</p>
+  {% if not ddns.primary %}<p class="error">There's no DNS primary yet, so Kea has nowhere to send updates: make a node the primary first.</p>{% endif %}
+  {% endif %}
+  {% if ddns.grants %}
+  <p class="error">Key <code>{{ ddns.key }}</code> may not register these names yet; it needs:</p>
+  <ul class="plain small">{% for zone, scope, owner, types in ddns.grants %}<li><code>{{ zone }}</code>: {{ {'zonesub': 'the whole zone', 'subdomain': 'names under ' ~ owner}[scope] }}, <code>{{ types }}</code></li>{% endfor %}</ul>
+  <div class="inline-actions"><button type="button" hx-post="/dhcp/grants" hx-vals='{{ {"grants": ddns.grants|tojson}|tojson }}'
+    hx-target="#grant-job" hx-swap="innerHTML" hx-disabled-elt="this">Add the missing grants</button></div>
+  <div id="grant-job"></div>
+  {% endif %}
+  {% endif %}
+  {% for n in notes or [] %}<p class="notice">{{ n }}</p>{% endfor %}
+  {% if saves %}<p class="notice">{{ saves }}</p>{% endif %}
+  {% if problems %}<p class="muted">Fix the problems above, then review again.</p>
+  {% elif changed or saves %}
+  {% if changed %}<p class="muted small">Each node is backed up, changed and checked (Kea answers, its sockets are open); if one fails, every node this change touched is rolled back, and so is the change here.</p>{% endif %}
+  <div class="inline-actions"><button type="submit">{{ label }}</button></div>
+  {% else %}<p class="muted">Nothing to apply.</p>{% endif %}
+  {% endif %}
+</section>

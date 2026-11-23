@@ -1,0 +1,15 @@
+{
+  "listen": "0.0.0.0",
+  "port": 8530,
+  "cert": "/etc/liteblox-agent/agent.crt",
+  "key": "/etc/liteblox-agent/agent.key",
+  "ca": "/etc/liteblox-agent/ca.crt",
+  "client_cn": "liteblox",
+  "allowed_ips": [],
+  "version": "0.1.0",
+  "state_dir": "/var/lib/liteblox-agent",
+  "named_conf": "/etc/bind/named.conf",
+  "managed_dir": "/etc/bind/liteblox",
+  "backup_paths": ["/etc/bind", "/var/lib/bind/liteblox", "/etc/kea", "/var/lib/kea", "/etc/chrony"],
+  "backup_keep": 10
+}

@@ -1,0 +1,89 @@
+{% extends 'base.html' %}
+{% block title %}Subnet calculator · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block head %}
+  <link rel="stylesheet" href="{{ asset('subnetcalc.css') }}">
+  <script src="{{ asset('subnetcalc.js') }}" defer></script>
+{% endblock %}
+{% block content %}
+<div class="subnetcalc">
+  <div class="heading"><div><h1>Subnet calculator</h1><p class="subtitle">Divide and visualize IP address ranges</p></div></div>
+
+  <form id="calcForm">
+    <div class="controls">
+      <div class="input-group">
+        <label for="calc-network">Network Address</label>
+        <div class="network-input">
+          <input type="text" id="calc-network" name="network" placeholder="192.168.1.0" value="192.168.1.0" autocomplete="off" spellcheck="false">
+          <span class="separator">/</span>
+          <input type="text" name="netbits" placeholder="24" value="24" aria-label="Prefix length" autocomplete="off" inputmode="numeric">
+        </div>
+      </div>
+      <div class="input-group">
+        <label for="calc-exclusions">Exclude Subnets</label>
+        <div class="network-input">
+          <input type="text" id="calc-exclusions" name="exclusions" placeholder="192.168.1.128/25, 192.168.1.192/26" autocomplete="off" spellcheck="false">
+        </div>
+      </div>
+      <div class="input-group buttons">
+        <button type="submit" class="btn btn-primary">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          Update
+        </button>
+        {#- Reset submits its own form below, so app.js's dialog asks first -#}
+        <button type="submit" form="calc-reset" class="btn btn-secondary">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          </svg>
+          Reset
+        </button>
+        <button type="button" id="copyBtn" class="btn btn-secondary">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+          </svg>
+          Copy Table
+        </button>
+      </div>
+    </div>
+  </form>
+  <form id="calc-reset" data-confirm="Reset all subnet divisions?" data-confirm-ok="Reset"></form>
+
+  <p id="calc-message" role="status" hidden></p>
+  <textarea id="copy-fallback" rows="8" readonly hidden aria-label="The table as text, to copy"></textarea>
+
+  <div class="info-bar">
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+    <span>Click <strong>Divide</strong> to split a subnet. Click colored mask badges to <strong>Join</strong>. Click the <strong>Range</strong> header to toggle between full range and useable IPs.
+      <a href="#" id="saveLink">Bookmark or share this link</a> to save your layout.
+    </span>
+  </div>
+
+  <div class="table-container">
+    <table>
+      <thead>
+        <tr>
+          <th>Subnet</th>
+          <th>Netmask</th>
+          <th id="rangeHeader" class="clickable" tabindex="0" role="button" title="Switch between the full range and the useable addresses">
+            <span>Range</span>
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M8 9l4-4 4 4m0 6l-4 4-4-4" />
+            </svg>
+          </th>
+          <th>Hosts</th>
+          <th>Divide</th>
+          <th id="joinHeader">Join</th>
+        </tr>
+      </thead>
+      <tbody id="calcbody">
+      </tbody>
+    </table>
+  </div>
+
+  <p class="muted small">An altered version of <a href="https://github.com/davidc/subnets" target="_blank" rel="noopener">David C A Croft's Visual Subnet Calculator</a>, modified for LiteBlox. <a href="/static/subnetcalc-LICENSE.txt" target="_blank" rel="noopener">Its license</a>.</p>
+</div>
+{% endblock %}

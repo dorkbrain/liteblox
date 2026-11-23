@@ -1,0 +1,10 @@
+{% extends 'base.html' %}
+{% block title %}{{ path }} · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<h1><a href="/backups/{{ backup.id }}">{{ node.name }} · {{ backup.created_at|localtime }}</a></h1>
+<section class="card">
+  <h2><code>{{ path }}</code></h2>
+  <pre class="log">{{ text }}</pre>
+</section>
+{% endblock %}

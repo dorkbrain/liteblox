@@ -1,0 +1,30 @@
+{% extends 'base.html' %}
+{% block title %}My account · LiteBlox{% endblock %}
+{% block content %}
+<h1>My account</h1>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if notice %}<p class="note">{{ notice }}</p>{% endif %}
+<section class="card form-card">
+  <dl class="facts">
+    <dt>User</dt><dd>{{ user.username }}</dd>
+    <dt>Role</dt><dd><span class="pill">{{ user.role }}</span> {% if not user.is_admin %}<span class="muted small">(an admin can change it)</span>{% endif %}</dd>
+    <dt>Created</dt><dd>{{ account.created_at|localtime }}</dd>
+    <dt>Last login</dt><dd>{{ account.last_login_at|reltime or '–' }}</dd>
+  </dl>
+</section>
+<section class="card form-card spaced">
+  <h2>Change your password</h2>
+  <form method="post" action="/account/password" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="text" name="username" value="{{ user.username }}" autocomplete="username" hidden>
+    <label>Current password <input type="password" name="current" autocomplete="current-password" required></label>
+    <div class="row">
+      <label>New password <input type="password" name="password" autocomplete="new-password" minlength="8" required></label>
+      <label>Again <input type="password" name="password2" autocomplete="new-password" minlength="8" required></label>
+    </div>
+    <p class="muted small">At least 8 characters. Your other sessions (other browsers or devices) are logged out.</p>
+    <div><button type="submit">Change password</button></div>
+  </form>
+</section>
+{% include 'partials/api_tokens.html' %}
+{% endblock %}

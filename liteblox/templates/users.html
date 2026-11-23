@@ -1,0 +1,75 @@
+{% extends 'base.html' %}
+{% block title %}Users · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="heading">
+  <h1>Users</h1>
+  <div class="inline-actions"><a class="button secondary" href="/audit">Audit log</a></div>
+</div>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if notice %}<p class="note">{{ notice }}</p>{% endif %}
+<section class="card table-wrap">
+  <table>
+    <thead><tr><th>User</th><th>Role</th><th>Created</th><th>Last login</th><th></th></tr></thead>
+    <tbody>
+    {% for u in users %}
+    <tr>
+      <td><strong>{{ u.username }}</strong>{% if u.username == user.username %} <span class="muted small">(you)</span>{% endif %}</td>
+      <td>
+        <form method="post" action="/users/{{ u.username }}/role" class="inline-actions"
+              {% if u.username == user.username %}data-confirm="Give up your own admin role? You'll be read-only right away." data-confirm-ok="Give up admin" data-confirm-unless="role=admin"{% endif %}>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+          <select name="role" aria-label="Role of {{ u.username }}" onchange="this.form.querySelector('button').hidden = false">
+            {% for r in roles %}<option value="{{ r }}" {% if r == u.role %}selected{% endif %}>{{ r }}</option>{% endfor %}
+          </select>
+          <button type="submit" class="secondary small" hidden>Save</button>
+        </form>
+      </td>
+      <td class="small">{{ u.created_at|localtime }}</td>
+      <td class="small">{{ u.last_login_at|reltime or 'never' }}</td>
+      <td class="actions">
+        {% if u.username == user.username %}
+        <a class="small" href="/account">Change your password</a>
+        {% else %}
+        <details class="inline-details">
+          <summary class="small">Reset password</summary>
+          <form method="post" action="/users/{{ u.username }}/password" class="stack">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+            <input type="password" name="password" placeholder="new password" aria-label="New password for {{ u.username }}" autocomplete="new-password" minlength="8" required>
+            <input type="password" name="password2" placeholder="again" aria-label="New password again" autocomplete="new-password" minlength="8" required>
+            <div><button type="submit" class="secondary small">Set password</button></div>
+            <p class="muted small">{{ u.username }}'s sessions are logged out.</p>
+          </form>
+        </details>
+        <form method="post" action="/users/{{ u.username }}/delete" class="inline" data-confirm="Delete {{ u.username }}? They can't log in afterwards." data-confirm-ok="Delete">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+          <button type="submit" class="link danger small">Delete</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card form-card spaced">
+  <h2>Add a user</h2>
+  <form method="post" action="/users" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <label>Username <input name="username" value="{{ form.username or '' }}" autocomplete="off" spellcheck="false" required
+      pattern="[a-z_][a-z0-9_.\-]{0,31}" title="lowercase letters, digits, _ . - (up to 32)"></label>
+    <div class="row">
+      <label>Password <input type="password" name="password" autocomplete="new-password" minlength="8" required></label>
+      <label>Again <input type="password" name="password2" autocomplete="new-password" minlength="8" required></label>
+    </div>
+    <label>Role
+      <select name="role">
+        <option value="readonly" {% if form.role != 'admin' %}selected{% endif %}>readonly: can look, can't change anything</option>
+        <option value="admin" {% if form.role == 'admin' %}selected{% endif %}>admin: can change everything, including users</option>
+      </select></label>
+    <div><button type="submit">Add user</button></div>
+  </form>
+</section>
+{% include 'partials/api_tokens.html' %}
+{% endblock %}

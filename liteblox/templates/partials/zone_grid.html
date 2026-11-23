@@ -1,0 +1,40 @@
+<div id="zone-grid" data-rev="{{ rev }}">
+  {% if oob %}<input type="hidden" name="rev" id="soa-rev" value="{{ rev }}" hx-swap-oob="true">{% endif %}
+  {% for n in notes %}<p class="note small">{{ n }}</p>{% endfor %}
+  {% for w in warnings %}<p class="notice small">{{ w }}</p>{% endfor %}
+  {% if is_draft %}
+  <div class="pending-bar">
+    <span><strong>{{ pending }}</strong> pending change{{ '' if pending == 1 else 's' }} (draft, not published)</span>
+    {% if stale %}<span class="pill error">the published copy changed since this draft started</span>{% endif %}
+    {% if linked %}<span class="small">publishes together with {% for l in linked %}<a href="/zones/{{ l }}"><code>{{ l }}</code></a>{% if not loop.last %}, {% endif %}{% endfor %} (PTR changes)</span>{% endif %}
+    <a class="button" href="/zones/{{ zone_name }}/review">Review</a>
+  </div>
+  {% endif %}
+  {% if user.is_admin %}
+  <form class="bulk-bar" id="bulk-bar" hidden onsubmit="return false">
+    <input type="hidden" name="rev" value="{{ rev }}">
+    <span><strong class="bulk-count">0</strong> selected</span>
+    {% set bulk = {'hx-post': '/zones/' ~ zone_name ~ '/records/bulk', 'hx-target': '#zone-grid', 'hx-swap': 'outerHTML',
+                   'hx-include': '#records-body tr:not([hidden]) .row-select:checked'} %}
+    <button type="button" class="danger" data-bulk-delete hx-vals='{"action": "delete"}'{% for k, v in bulk.items() %} {{ k }}="{{ v }}"{% endfor %}
+            hx-confirm="Delete the selected records?" data-confirm-ok="Delete">Delete</button>
+    {% if not rr %}
+    <span class="bulk-field"><input name="ttl" size="7" placeholder="1h" aria-label="New TTL" spellcheck="false">
+      <button type="button" class="secondary" hx-vals='{"action": "ttl"}'{% for k, v in bulk.items() %} {{ k }}="{{ v }}"{% endfor %}
+              title="Leave the box empty for the zone's default TTL">Set TTL</button></span>
+    <span class="bulk-field"><input name="comment" placeholder="comment" aria-label="New comment">
+      <button type="button" class="secondary" hx-vals='{"action": "comment"}'{% for k, v in bulk.items() %} {{ k }}="{{ v }}"{% endfor %}
+              title="Leave the box empty to clear the comments">Set comment</button></span>
+    {% endif %}
+    <button type="button" class="link" data-bulk-clear>Clear</button>
+  </form>
+  {% endif %}
+  <div class="table-wrap">
+  <table class="records">
+    <thead><tr>{% if user.is_admin %}<th class="select"><input type="checkbox" id="select-shown" aria-label="Select every record shown" title="Select every record shown (after the filter)"></th>{% endif %}{% for key, label in [('name', 'Name'), ('ttl', 'TTL'), ('type', 'Type'), ('value', 'Value')] %}<th><button type="button" class="sort" data-sort="{{ key }}" title="Sort by {{ label|lower }}; click again to reverse, a third time for file order">{{ label }}</button></th>{% endfor %}<th>Comment</th>{% if user.is_admin %}<th></th>{% endif %}</tr></thead>
+    <tbody id="records-body">
+    {% for r in rows %}{% include 'partials/record_row.html' %}{% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>

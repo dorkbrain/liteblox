@@ -1,0 +1,25 @@
+<h2>Zones on this node</h2>
+{% if error %}
+<p class="error">{{ error }}</p>
+{% else %}
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Zone</th><th>Type</th><th>File</th><th>Declared in</th><th>Serial</th><th>LiteBlox</th></tr></thead>
+  <tbody>
+  {% for z in zones if not z.builtin %}
+  {% set k = known.get(z.name) %}
+  <tr>
+    <td>{% if k %}<a href="/zones/{{ z.name }}"><code>{{ z.name }}</code></a>{% else %}<code>{{ z.name }}</code>{% endif %}{% if z.view %} <span class="muted small">view {{ z.view }}</span>{% endif %}</td>
+    <td>{{ z.type }}</td>
+    <td class="small"><code>{{ z.file or '–' }}</code></td>
+    <td class="small muted">{{ z.declared_in or '–' }}</td>
+    <td class="small">{{ z.loaded_serial or '–' }}</td>
+    <td>{% if k and k.node_id %}<span class="pill ready">served here</span>{% elif k %}<span class="pill">in LiteBlox</span>{% else %}<span class="muted small">not in LiteBlox</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if not node.managed %}<p class="muted small">Taking over the node (<a href="/nodes/{{ node.id }}/takeover">Take over</a>) brings its zones into LiteBlox.</p>{% endif %}
+<details><summary class="muted small">named-checkconf -p (key secrets masked)</summary><pre class="log">{{ checkconf }}</pre></details>
+{% endif %}

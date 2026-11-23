@@ -1,0 +1,79 @@
+{% extends 'ipam_base.html' %}
+{% block title %}{{ device.label or mac }} · Devices · IPAM · LiteBlox{% endblock %}
+{% block ipam %}
+<h1><a href="/ipam">IPAM</a> · <a href="/ipam/seen">Devices seen</a> · <code>{{ mac }}</code></h1>
+{% for e in lease_errors %}<p class="notice small">Leases: {{ e }}</p>{% endfor %}
+<section class="card">
+  <h2>{{ device.label or 'No label' }}</h2>
+  <dl class="facts">
+    <dt>MAC</dt><dd><code>{{ mac }}</code>{% if vendor %} <span class="muted small">{{ vendor }}</span>{% endif %}</dd>
+    {% if device.comment %}<dt>Comment</dt><dd>{{ device.comment }}</dd>{% endif %}
+    {% if device.repeater %}<dt>Wi-Fi repeater</dt><dd><span class="pill">repeater</span> <span class="muted small">It stands in for the devices connected through the repeater, so it isn't flapping or a conflict wherever it shows.</span></dd>{% endif %}
+  </dl>
+  {% if user.is_admin %}
+  <form method="post" action="/ipam/devices/{{ mac }}" class="device-form spaced">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <label>Label <input name="label" value="{{ device.label }}" maxlength="64" placeholder="e.g. Kitchen tablet"></label>
+    <label>Comment <input name="comment" value="{{ device.comment }}" maxlength="500"></label>
+    <input type="hidden" name="repeater_shown" value="1">
+    <label class="check"><input type="checkbox" name="repeater" value="1"{{ ' checked' if device.repeater }}> Wi-Fi repeater: this MAC stands in for the devices connected through it</label>
+    <button type="submit">Save</button>
+  </form>
+  <p class="muted small">A label shows next to this MAC everywhere and search finds it. It changes nothing in DNS or DHCP.</p>
+  <p class="muted small">A repeater that translates MACs answers on your network with one MAC of its own for every device behind it. Marked as a repeater's, that MAC no longer counts as flapping, and it raises no "reserved for" or "IPAM has it for" warning on the addresses it shows on. <a href="/help/ipam#repeater-macs">More</a></p>
+  {% endif %}
+</section>
+
+<section class="card spaced">
+  <h2>DHCP and DNS</h2>
+  {% for st in steps %}{% set s = st.subnet %}{% set r = st.reservation %}{% set l = st.lease %}
+  <div class="device-step{{ ' spaced' if not loop.first }}">
+    <h3><a href="/dhcp/subnets/{{ s.id }}/addresses"><code>{{ s.prefix }}</code></a>{% if st.ddns %} <span class="muted small">registers clients in {{ s.ddns_domain }}</span>{% endif %}</h3>
+    <dl class="facts">
+      <dt>Reservation</dt><dd>{% if r %}<a href="/dhcp/subnets/{{ s.id }}/reservations/{{ r.id }}">{% if r.ip_address %}<code>{{ r.ip_address }}</code>{% else %}name only{% endif %}</a>{% if r.hostname %} <code>{{ r.hostname }}</code>{% endif %}{% else %}<span class="muted">none</span>{% endif %}</dd>
+      <dt>Lease</dt><dd>{% if l %}<a href="/search?q={{ l.ip }}#address"><code>{{ l.ip }}</code></a>{% if l.hostname %} <code>{{ l.hostname }}</code>{% if l.registered %} <span class="muted small">in DNS</span>{% endif %}{% endif %}{% if l.expires_in > 0 %} <span class="muted small" title="{{ l.expires|localtime }}">ends in {{ l.expires_in|duration }}</span>{% endif %}{% else %}<span class="muted">none now</span>{% endif %}</dd>
+      {% if st.names %}<dt>Names</dt><dd>{% for n in st.names %}<code>{{ n }}</code>{{ ', ' if not loop.last }}{% endfor %}</dd>{% endif %}
+    </dl>
+    {% if user.is_admin %}
+    <div class="step-actions">
+    {% if not r %}
+      {% if st.ddns %}
+      <p><a class="button secondary small" href="/dhcp/subnets/{{ s.id }}/reservations/new?mac={{ mac|urlencode }}&hostname={{ (suggested or (l.hostname if l else ''))|urlencode }}">Register a name</a>
+        <span class="muted small">A name-only reservation: it keeps getting any pool address, and DNS always has it under the name you pick.</span></p>
+      {% endif %}
+      {% if l %}<p><a class="button secondary small" href="/dhcp/subnets/{{ s.id }}/reservations/new?mac={{ mac|urlencode }}&ip={{ l.ip|urlencode }}&hostname={{ (suggested or l.hostname)|urlencode }}">Reserve {{ l.ip }}</a>
+        <span class="muted small">It gets this address every time.</span></p>{% endif %}
+    {% elif not r.ip_address %}
+      {% if l %}<p><a class="button secondary small" href="/dhcp/subnets/{{ s.id }}/reservations/{{ r.id }}?ip={{ l.ip|urlencode }}">Fix its address</a>
+        <span class="muted small">Keep {{ l.ip }} for it from now on, with its name.</span></p>{% endif %}
+      <form method="post" action="/dhcp/subnets/{{ s.id }}/reservations/{{ r.id }}/delete" class="inline"
+            data-confirm="Back down: delete the name-only reservation {{ r.hostname }} for {{ mac }}? Its name leaves DNS when its lease ends or renews under its own name." data-confirm-ok="Delete">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button type="submit" class="secondary small">Back down</button>
+        <span class="muted small">Remove the name-only reservation.</span></form>
+    {% else %}
+      {% if st.ddns and r.hostname %}<p><a class="button secondary small" href="/dhcp/subnets/{{ s.id }}/reservations/{{ r.id }}?ip=">Back down to a name</a>
+        <span class="muted small">Keep the name {{ r.hostname }} in DNS, and let it take any pool address.</span></p>{% endif %}
+      <p><a class="small" href="/dhcp/subnets/{{ s.id }}/reservations/{{ r.id }}">Edit or delete the reservation</a></p>
+    {% endif %}
+    </div>
+    {% endif %}
+  </div>
+  {% else %}
+  <p class="muted">No reservation, and no active lease now, in the DHCP subnets.</p>
+  {% endfor %}
+</section>
+
+<section class="card spaced">
+  <h2>Seen <span class="muted small">by the nodes</span></h2>
+  {% if history %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>IP</th><th>Last seen</th><th>First seen</th><th>Source</th></tr></thead>
+    <tbody>{% for h in history %}
+    <tr><td><a href="/search?q={{ h.ip }}#address"><code>{{ h.ip }}</code></a>{% if h.expected %} <span class="pill">expected</span>{% endif %}</td>
+      <td class="nowrap">{{ h.last_seen|reltime }}{% if h.node %} <span class="muted small">by {{ h.node }}</span>{% endif %}</td>
+      <td class="nowrap small">{{ h.first_seen|reltime }}</td><td class="small">{{ h.source }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}<p class="muted">Not in the last {{ keep_days }} days.</p>{% endif %}
+</section>
+{% endblock %}

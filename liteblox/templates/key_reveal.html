@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+{% block title %}Key {{ r.name }} · LiteBlox{% endblock %}
+{% block content %}
+{% set tab = 'keys' %}{% include 'partials/settings_tabs.html' %}
+<section class="card form-card">
+  <h2>Key <code>{{ r.name }}</code></h2>
+  <p class="notice">This is the only time LiteBlox shows this secret. Copy it or download the key file now; if it's lost, replace the secret.</p>
+  <pre class="log">{{ key_file }}</pre>
+  <p class="muted small">For <code>nsupdate -k {{ r.name }}.key</code>, a Kea <code>tsig-keys</code> entry, or an ACME client's RFC 2136 settings (algorithm <code>{{ r.algorithm }}</code>). It's being written to every node now: <a href="/jobs/{{ r.job_id }}">job #{{ r.job_id }}</a>. Then grant it a zone.</p>
+  <div class="inline-actions">
+    <a class="button secondary" href="/settings/keys/reveal/{{ token }}/download">Download {{ r.name }}.key</a>
+    <form method="post" action="/settings/keys/reveal/{{ token }}/done">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button type="submit">I've saved it</button></form>
+  </div>
+</section>
+{% endblock %}

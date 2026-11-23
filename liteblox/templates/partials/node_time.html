@@ -1,0 +1,26 @@
+<h2>Time (chrony)</h2>
+{% if not node.ntp %}
+  {% if time and time.daemon %}<p class="small">Kept by <strong>{{ time.daemon }}</strong>{% if time.daemon == 'chrony' and not time.managed %} with its own config{% endif %}: LiteBlox doesn't manage it.</p>
+  {% elif error %}<p class="muted small">{{ error }}</p>{% endif %}
+  {% if user.is_admin %}<p><a class="button secondary" href="/nodes/{{ node.id }}/bootstrap?ntp=1">Set up time sync</a></p>
+  <p class="muted small">Installs chrony (it replaces systemd-timesyncd) with the sources on <a href="/settings/time">Settings → Time</a>. <a href="/help/ntp">More</a></p>{% endif %}
+{% elif error %}
+  <p class="error">{{ error }}</p>
+{% else %}
+  {% set tr = time.tracking if time else none %}
+  <dl class="facts">
+    <dt>chrony</dt><dd>{% if time and time.daemon == 'chrony' %}running{% else %}<span class="pill error">not running</span>{% endif %}</dd>
+    <dt>Synced from</dt><dd>{% if tr and tr.stratum %}<code>{{ tr.reference }}</code>, stratum {{ tr.stratum }}, offset {{ '%+.6f'|format(tr.offset) }}s{% else %}<span class="pill warn">no source yet</span>{% endif %}</dd>
+    <dt>Serves time</dt><dd>{% if node.ntp_serve %}to {{ (node.ntp_allow|fromjson)|join(', ') }}{% if node.ntp_local %}; keeps serving when its sources are unreachable{% endif %}{% else %}<span class="muted">no</span>{% endif %} <a class="small" href="/settings/time">Settings → Time</a></dd>
+    <dt>Sources</dt><dd>{% for s in (time.sources if time else []) %}<div class="small"><code>{{ s.address }}</code> {% if s.state == '*' %}<span class="pill ready">in use</span>{% elif s.state == '+' %}<span class="pill">combined</span>{% elif s.reach %}reachable{% else %}<span class="muted">not reachable</span>{% endif %}{% if s.stratum %} · stratum {{ s.stratum }}{% endif %}</div>{% else %}<span class="muted">none</span>{% endfor %}</dd>
+  </dl>
+  {% if drift %}
+  <p class="notice"><span class="pill warn">changed outside LiteBlox</span> chrony.conf was edited on the node.</p>
+  {% if diff %}<pre class="log">{{ diff }}</pre>{% endif %}
+  {% elif stale %}<p class="notice"><span class="pill warn">config behind</span> it missed a change; the health check writes it again.</p>{% endif %}
+  {% if user.is_admin %}
+  <form class="card-foot" method="post" action="/nodes/{{ node.id }}/time/rewrite" data-confirm="Write LiteBlox's chrony config to {{ node.name }} again?" data-confirm-ok="Rewrite">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <button type="submit" class="secondary">{{ 'Overwrite the changes' if drift else 'Rewrite time config' }}</button></form>
+  {% endif %}
+{% endif %}

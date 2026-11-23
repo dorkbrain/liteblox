@@ -1,0 +1,100 @@
+{% extends 'base.html' %}
+{% from 'partials/node_pill.html' import node_pill %}
+{% from 'partials/settings.html' import setting %}
+{% block title %}{{ node.name }} · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="heading">
+  <h1>{{ node.name }} {{ node_pill(node, id='node-status-pill') }}{% if node.role %} <span class="pill">{{ node.role }}</span>{% endif %}{% if not node.bind %} <span class="pill">{{ kind }}</span>{% endif %}</h1>
+  <div class="inline-actions">
+  {% if user.is_admin and primary and node.role == 'secondary' and not node.pending %}
+  <form method="post" action="/nodes/{{ node.id }}/primary" data-confirm="Promote {{ node.name }} to primary in place of {{ primary.name }}? Static zones start from LiteBlox's published copies, dynamic zones from the newest copy a reachable node has. {{ primary.name }} becomes its secondary (if it's down, as soon as it answers again), and records only {{ primary.name }} had are kept in a report. DHCP and ACME clients must send their updates to {{ node.name }} afterwards." data-confirm-ok="Promote {{ node.name }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <button type="submit">Promote to primary</button>
+  </form>{% endif %}
+  <a class="button secondary" href="/nodes/{{ node.id }}/backups">Backups</a>
+  {% if user.is_admin and node.bind and node.status != 'new' and not node.managed %}{% if node.other_liteblox %}<a class="button" href="/nodes/readopt">Re-adopt</a>{% else %}<a class="button" href="/nodes/{{ node.id }}/takeover">Take over</a>{% endif %}{% endif %}
+  {% if node.managed %}<a class="button secondary" href="/nodes/{{ node.id }}/settings">Server settings</a>{% endif %}
+  {% if user.is_admin and can_upgrade %}<form method="post" action="/nodes/{{ node.id }}/upgrade-agent" class="inline" data-confirm="Upgrade {{ node.name }}'s agent to the one this LiteBlox ships? The agent restarts for a few seconds (DNS, DHCP and time keep running); if the new one doesn't start, the old one comes back." data-confirm-ok="Upgrade agent">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button type="submit">Upgrade agent</button></form>{% endif %}
+  {% if user.is_admin %}<a class="button secondary" href="/nodes/{{ node.id }}/bootstrap">{% if node.status == 'new' %}Set up{% else %}Repair / upgrade agent{% endif %}</a>{% endif %}
+  </div>
+</div>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if done %}<p class="notice">{{ done }}</p>{% endif %}
+{% if node.pending %}<p class="notice"><span class="pill warn">{{ 'demote' if node.pending == 'demote' else 'update' }} pending</span> {{ node.name }} was unreachable when {{ primary.name if primary else 'another node' }} became the primary. {% if node.pending == 'demote' %}It is demoted to a secondary{% else %}Its config is brought in line{% endif %} as soon as it answers again (the health check runs every minute); anything only its copies hold is kept in a report here.</p>{% endif %}
+{% if second %}<p class="error">{{ node.name }} declares {{ second|join(', ') }} as primary outside LiteBlox: two primaries split updates between them. <a href="/nodes/{{ node.id }}/drift">Choose which node stays primary</a></p>
+{% elif drift %}<p class="notice"><span class="pill warn">changed outside LiteBlox</span> {{ drift|join(', ') }} on {{ node.name }} {{ 'differs' if drift|length == 1 else 'differ' }} from what LiteBlox wrote. <a href="/nodes/{{ node.id }}/drift">See the changes</a></p>{% endif %}
+{% if reports %}<section class="card spaced">
+  <h2>Records only {{ node.name }}'s copies had</h2>
+  <ul class="plain">{% for r in reports %}<li><a href="/nodes/{{ node.id }}/reports/{{ r.id }}"><code>{{ r.zone }}</code>: {{ r.rrsets|length }} record set{{ '' if r.rrsets|length == 1 else 's' }}</a> <span class="muted small">{{ r.created_at|localtime }}</span></li>{% endfor %}</ul>
+</section>{% endif %}
+{% if clock[0] %}<p class="{{ 'error' if clock[0] == 'error' else 'notice' }}">{{ clock[1] }} <a href="/help/troubleshooting#a-nodes-clock-is-off">Help</a></p>{% endif %}
+{% if stale %}<p class="error">No successful backup of {{ node.name }} in the last 48 hours. <a href="/nodes/{{ node.id }}/backups">Backups</a></p>{% endif %}
+{% if needs_repair %}<p class="error">{{ node.name }}'s address or agent port changed, so the agent's certificate no longer matches. Run <a href="/nodes/{{ node.id }}/bootstrap">Repair / upgrade agent</a>.</p>{% endif %}
+{% if needs_upgrade %}<p class="notice">This node runs a different agent build than this LiteBlox version ships. {% if can_upgrade %}<strong>Upgrade agent</strong> installs it over the agent's own connection, no SSH needed.{% else %}Run <strong>Repair / upgrade agent</strong> (over SSH): this node doesn't have the installer that lets LiteBlox upgrade its agent directly yet, or its setup changed.{% endif %} <a href="/help/install#upgrading-an-agent">Help</a></p>{% endif %}
+<div class="grid pair">
+  <section class="card stack">
+    <h2>Node</h2>
+    <dl class="facts">
+      <dt>Address</dt><dd><code>{{ node.host }}</code> (SSH {{ node.ssh_port }}, agent {{ node.agent_port }})</dd>
+      {% if node.bind %}<dt>DNS address</dt><dd>{% if address %}<code>{{ address }}</code>{% else %}<span class="pill warn">unknown</span>{% endif %}
+        <span class="muted small">used by the other nodes for transfers and NOTIFY, and by LiteBlox's DNS checks</span>
+        {% if user.is_admin %}<form method="post" action="/nodes/{{ node.id }}/dns-address" class="inline-actions">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+          <input name="dns_address" value="{{ node.dns_address or '' }}" placeholder="{{ address or 'IP address' }}" aria-label="DNS address" size="16">
+          <button type="submit" class="secondary">Save</button></form>{% endif %}</dd>{% endif %}
+      <dt>SSH host key</dt><dd><code class="small">{{ node.host_key_fp }}</code></dd>
+      {% if node.cert_not_after %}<dt>Agent cert expires</dt><dd>{{ node.cert_not_after[:10] }}</dd>{% endif %}
+      {% if not node.bind %}<dt>Runs</dt><dd>{% if kind == 'scanner' %}only the agent: a <strong>scanner</strong> <span class="muted small">(IPAM reads who's on its networks every minute and sweeps through it; no BIND, DHCP or Time from LiteBlox)</span>{% else %}{{ kind }} <span class="muted small">(no BIND from LiteBlox)</span>{% endif %}</dd>
+      {% else %}<dt>BIND config</dt><dd>{% if node.managed %}managed by LiteBlox <span class="muted small">(taken over {{ node.taken_over_at|localtime }}; the node's own files are in <code>/etc/bind/pre-liteblox/</code>)</span>{% else %}<span class="muted">the node's own{% if node.status != 'new' %}; LiteBlox changes nothing here until you take it over{% endif %}</span>{% endif %}</dd>{% endif %}
+      {% if node.status_detail %}<dt>Last error</dt><dd class="error-text">{{ node.status_detail }}</dd>{% endif %}
+    </dl>
+    {% if user.is_admin %}<p class="small card-foot"><a href="/nodes/{{ node.id }}/edit">Change address or host key</a></p>{% endif %}
+  </section>
+  <section class="card stack" {% if node.status != 'new' %}hx-get="/nodes/{{ node.id }}/status" hx-trigger="load" hx-swap="innerHTML"{% endif %}>
+    <h2>Agent</h2>
+    <p class="muted">{% if node.status == 'new' %}Not set up yet.{% else %}Checking…{% endif %}</p>
+  </section>
+  {% if node.status != 'new' %}
+  <section class="card stack" id="dhcp" hx-get="/nodes/{{ node.id }}/dhcp" hx-trigger="load" hx-swap="innerHTML">
+    <h2>DHCP (Kea)</h2>
+    <p class="muted">Checking…</p>
+  </section>
+  <section class="card stack" id="time" hx-get="/nodes/{{ node.id }}/time" hx-trigger="load" hx-swap="innerHTML">
+    <h2>Time (chrony)</h2>
+    <p class="muted">Checking…</p>
+  </section>
+  {% endif %}
+</div>
+
+{% if zones and node.status == 'new' and node.bind %}
+<section class="card spaced">
+  <h2>Zones LiteBlox manages here</h2>
+  <ul class="plain">{% for z in zones %}<li><code>{{ z.name }}</code> <span class="muted small">{{ z.node_file }}</span></li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+{% if node.status != 'new' and node.bind %}
+<section class="card spaced" hx-get="/nodes/{{ node.id }}/zones" hx-trigger="load" hx-swap="innerHTML">
+  <h2>Zones on this node</h2>
+  <p class="muted">Asking the agent…</p>
+</section>
+{% endif %}
+
+{% if jobs %}
+<section class="card spaced">
+  <div class="heading"><h2>Recent jobs</h2><a class="small" href="/jobs?node={{ node.name|urlencode }}">All jobs</a></div>
+  <ul class="plain">{% for j in jobs %}<li><a href="/jobs/{{ j.id }}">#{{ j.id }} {{ j.kind|job_label }}</a> <span class="pill {{ j.status }}">{{ j.status }}</span> <span class="muted small">{{ j.created_at|reltime }} · {{ j.username or '' }}</span></li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+{% if user.is_admin %}
+<section class="card form-card settings spaced danger-zone" id="danger">
+  <h2>Danger zone</h2>
+  {% call setting('Remove from LiteBlox', None, 'LiteBlox forgets ' ~ node.name ~ ': ' ~ ('its zones, ' if node.bind else '') ~ 'backups list and jobs here. Nothing on the node changes: ' ~ ('BIND (and Kea) keep' if node.bind else 'Kea and chrony (if set up) keep') ~ ' running with the config they have, and the agent stays installed. The next page shows what it affects before anything happens.') %}
+    <a class="button danger" href="/nodes/{{ node.id }}/remove">Remove {{ node.name }}…</a>
+  {% endcall %}
+</section>
+{% endif %}
+{% endblock %}

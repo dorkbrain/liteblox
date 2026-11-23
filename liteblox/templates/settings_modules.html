@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% from 'partials/ui.html' import action_bar %}
+{% block title %}Modules · Settings · LiteBlox{% endblock %}
+{% block content %}
+{% include 'partials/settings_tabs.html' %}
+{% if done %}<p class="notice">{{ done }}</p>{% endif %}
+{% if errors.all %}<p class="error" role="alert">{{ errors.all|capitalize }}.</p>{% endif %}
+<p class="page-intro muted">What this LiteBlox runs. A module that's off is hidden everywhere: its menu, its Dashboard tile, its problems and its pages. <a href="/help/modules">More in Help</a>.</p>
+<form method="post" action="/settings/modules" class="settings card form-card">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  {% include 'partials/module_switches.html' %}
+  {% call action_bar() %}<button type="submit">Save</button>{% endcall %}
+</form>
+{% endblock %}

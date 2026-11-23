@@ -1,0 +1,19 @@
+{% extends 'base.html' %}
+{% block title %}Publish #{{ deploy.id }} · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+{% include 'partials/zone_tabs.html' %}
+<section class="card">
+  <h2>Publish #{{ deploy.id }} <span class="pill {{ 'ready' if deploy.status == 'ok' else ('running' if deploy.status == 'running' else 'error') }}">{{ deploy.status }}</span></h2>
+  <dl class="facts">
+    <dt>Started</dt><dd>{{ deploy.created_at|localtime }} by {{ deploy.username }}</dd>
+    {% if deploy.message %}<dt>Message</dt><dd>{{ deploy.message }}</dd>{% endif %}
+    {% if deploy.serial %}<dt>Serial</dt><dd>{{ deploy.serial }}</dd>{% endif %}
+    {% if deploy.commit_sha %}<dt>Commit</dt><dd><a href="/zones/{{ zone_name }}/history/{{ deploy.commit_sha }}"><code>{{ deploy.commit_sha[:10] }}</code></a></dd>{% endif %}
+    {% if deploy.error %}<dt>Problem</dt><dd class="error-text">{{ deploy.error }}</dd>{% endif %}
+  </dl>
+  <h2 class="spaced">Nodes</h2>
+  <ul class="plain">{% for n in nodes %}<li>{{ n.name }} <span class="pill {{ 'ready' if n.status == 'verified' else ('warn' if n.status in ('pending', 'staged', 'committed', 'aborted') else 'error') }}">{{ n.status }}</span>{% if n.served_serial %} <span class="muted small">serving {{ n.served_serial }}</span>{% endif %}{% if n.error %} <span class="error-text small">{{ n.error }}</span>{% endif %}</li>{% endfor %}</ul>
+  {% if job %}<p><a href="/jobs/{{ job.id }}">Full log</a></p>{% endif %}
+</section>
+{% endblock %}

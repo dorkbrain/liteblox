@@ -1,0 +1,76 @@
+{% extends 'base.html' %}
+{% block title %}Add many · {{ zone_name }} · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+{% include 'partials/zone_tabs.html' %}
+<section class="card">
+  <h2>Add many records</h2>
+  <p class="muted small">Paste zone-file lines, or pick a CSV. Nothing changes until you check the preview and add:
+    the records then go into the draft as one change, reviewed and published as usual.
+    <a href="/help/editing#adding-many-records">More</a></p>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="/zones/{{ zone_name }}/records/many/preview" enctype="multipart/form-data" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="ptr_field" value="1">
+    <label for="many-text">Lines, one record each: <code>name [ttl] TYPE value [; comment]</code>, names relative to <code>{{ zone_name }}</code> (<code>@</code> for the zone itself)</label>
+    <textarea id="many-text" name="text" class="zone-text many-text" spellcheck="false"
+              placeholder="host1 A 192.0.2.10 ; office printer&#10;host2 3600 A 192.0.2.11&#10;www CNAME host1">{{ text }}</textarea>
+    <div class="many-csv">
+      <label>Or a CSV file <input type="file" name="csv" accept=".csv,text/csv"></label>
+      {% if csv_name %}<span class="small">Using <code>{{ csv_name }}</code>, or pick another.
+        <label class="check"><input type="checkbox" name="csv_clear" value="1"><span>Use the lines instead</span></label></span>
+        <textarea name="csv_text" hidden>{{ csv_text }}</textarea><input type="hidden" name="csv_name" value="{{ csv_name }}">{% endif %}
+      <a href="/zones/{{ zone_name }}/records-template.csv" class="small">Download a CSV template</a>
+      <a href="/zones/{{ zone_name }}/records.csv" class="small">Export this zone as CSV</a>
+    </div>
+    <label class="check"><input type="checkbox" name="replace" value="1" {% if replace %}checked{% endif %}>
+      <span><strong>Replace</strong>: for each name and type in the lines, the lines become its records (others with that name and type are removed)</span></label>
+    <label class="check"><input type="checkbox" name="ptr" value="1" {% if ptr %}checked{% endif %}>
+      <span>Keep PTR records in step (A and AAAA, in reverse zones LiteBlox holds)</span></label>
+    <div><button type="submit" class="secondary">Preview</button> <a href="/zones/{{ zone_name }}" class="small">Back to the records</a></div>
+  </form>
+</section>
+
+{% if rows is not none %}
+<section class="card spaced">
+  <h2>Preview</h2>
+  <p class="small">
+    {% for key, label, cls in [('add', 'to add', 'ready'), ('change', 'to change', 'warn'), ('remove', 'to remove', 'error'), ('same', 'already there', ''), ('error', 'with errors', 'error')] if counts.get(key) %}
+    <span class="pill {{ cls }}">{{ counts[key] }} {{ label }}</span>{% endfor %}
+  </p>
+  <div class="table-wrap">
+  <table class="many-preview">
+    <thead><tr><th>From</th><th></th><th>Record</th><th>Notes</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr class="many-{{ r.outcome }}">
+      <td class="small muted">{{ r.where or 'in the zone' }}</td>
+      <td>{% if r.outcome == 'add' %}<span class="pill ready">adds</span>{% elif r.outcome == 'change' %}<span class="pill warn">changes</span>{% elif r.outcome == 'remove' %}<span class="pill error">removes</span>{% elif r.outcome == 'same' %}<span class="pill">skips</span>{% else %}<span class="pill error">error</span>{% endif %}</td>
+      <td><code>{{ r.text }}</code></td>
+      <td class="small">{% if r.error %}<span class="error-text">{{ r.error }}</span>{% endif %}<span class="muted">{{ r.note }}</span>{% for w in r.warnings %}<div class="notice small">{{ w }}</div>{% endfor %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% set todo = counts.get('add', 0) + counts.get('change', 0) + counts.get('remove', 0) %}
+  {% if counts.get('error') %}
+  <p class="error small">Fix the lines marked as errors (or take them out), then preview again.</p>
+  {% elif todo %}
+  <form method="post" action="/zones/{{ zone_name }}/records/many" class="inline-actions">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="rev" value="{{ rev }}">
+    <input type="hidden" name="ptr_field" value="1">
+    {% if ptr %}<input type="hidden" name="ptr" value="1">{% endif %}
+    {% if replace %}<input type="hidden" name="replace" value="1">{% endif %}
+    <textarea name="text" hidden>{{ text }}</textarea>
+    {% if csv_text %}<textarea name="csv_text" hidden>{{ csv_text }}</textarea><input type="hidden" name="csv_name" value="{{ csv_name }}">{% endif %}
+    <button type="submit">Make these {{ todo }} change{{ '' if todo == 1 else 's' }}</button>
+    <span class="muted small">into the draft; you review and publish it next</span>
+  </form>
+  {% else %}
+  <p class="muted small">Nothing to change: every line is already there.</p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

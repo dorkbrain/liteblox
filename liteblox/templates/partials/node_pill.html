@@ -1,0 +1,22 @@
+{# A node's status pill, with the reason in its tooltip. #}
+{% macro node_pill(n, id=None, oob=False) -%}
+{%- if n.status == 'error' and n.status_detail %}{% set tip = n.status_detail.splitlines()[0]|truncate(160) %}
+{%- elif n.status == 'ready' %}{% set tip = 'agent answered ' ~ (n.last_seen_at|localtime) if n.last_seen_at else 'agent set up' %}
+{%- else %}{% set tip = 'not set up yet' %}{% endif -%}
+<span {% if id %}id="{{ id }}" {% endif %}class="pill {{ n.status }}" title="{{ tip }}"{% if oob %} hx-swap-oob="true"{% endif %}>{{ n.status }}</span>
+{%- endmacro %}
+
+{# Things on a node that need an admin: a pending demote, config changed outside LiteBlox, demote reports. #}
+{% macro flags(n, reports=0) -%}
+{%- if n.pending %} <a href="/nodes/{{ n.id }}" class="pill warn" title="missed a role change while unreachable; runs when it answers again">{{ 'demote' if n.pending == 'demote' else 'update' }} pending</a>{% endif %}
+{%- if n.second_primary %} <a href="/nodes/{{ n.id }}/drift" class="pill error" title="declares zones as primary outside LiteBlox">second primary</a>
+{%- elif n.drift %} <a href="/nodes/{{ n.id }}/drift" class="pill warn" title="its generated BIND config was changed outside LiteBlox">config changed</a>{% endif %}
+{%- if reports %} <a href="/nodes/{{ n.id }}" class="pill warn" title="records only its copies had, kept when it was demoted">{{ reports }} report{{ '' if reports == 1 else 's' }}</a>{% endif %}
+{%- if n.dhcp_ha_state and n.dhcp_ha_state != 'hot-standby' %} <a href="/dhcp" class="pill {{ 'error' if n.dhcp_ha_state == 'terminated' else 'warn' }}" title="{{ {'partner-down': 'the other DHCP server is down: this one serves alone', 'terminated': 'DHCP failover stopped, usually because the two clocks are over 60s apart'}.get(n.dhcp_ha_state, 'DHCP failover is starting or syncing') }}">DHCP {{ n.dhcp_ha_state }}</a>{% endif %}
+{%- if n.dhcp_drift %} <a href="/nodes/{{ n.id }}#dhcp" class="pill warn" title="its Kea config was changed outside LiteBlox">Kea config changed</a>{% endif %}
+{%- if n.ntp and n.ntp_drift %} <a href="/nodes/{{ n.id }}#time" class="pill warn" title="its chrony config was changed outside LiteBlox">time config changed</a>
+{%- elif n.ntp and n.ntp_state and not (n.ntp_state|fromjson).synced %} <a href="/nodes/{{ n.id }}#time" class="pill warn" title="chrony has no usable time source">time: no source</a>
+{%- elif n.ntp and n.last_seen_at and not n.ntp_state %} <a href="/nodes/{{ n.id }}#time" class="pill error" title="chrony isn't running">time: chrony down</a>{% endif %}
+{%- if n.clock_skew is number and (n.clock_skew|abs) >= 30 %} <a href="/nodes/{{ n.id }}" class="pill {{ 'error' if (n.clock_skew|abs) >= 120 else 'warn' }}" title="its clock minus LiteBlox's; signed updates fail at 300s">clock {{ '%+.0f'|format(n.clock_skew) }}s</a>
+{%- elif n.clock_synced == 0 %} <a href="/nodes/{{ n.id }}" class="pill warn" title="NTP isn't synchronizing its clock (timedatectl)">clock not synced</a>{% endif %}
+{%- endmacro %}

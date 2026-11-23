@@ -1,0 +1,13 @@
+{% extends 'base.html' %}
+{% block title %}#{{ job.id }} {{ job.kind|job_label }} · Jobs · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="heading">
+  <h1><a href="/jobs">Jobs</a> · #{{ job.id }} {{ job.kind|job_label }}{% if node %} · <a href="/nodes/{{ node.id }}">{{ node.name }}</a>{% endif %}{% if zone %} · {% if job.kind == 'delete zone' %}<code>{{ zone }}</code>{% else %}<a href="/zones/{{ zone }}"><code>{{ zone }}</code></a>{% endif %}{% endif %}</h1>
+</div>
+<section class="card">
+  <div id="job-log" {% if job.status == 'running' %}hx-get="/jobs/{{ job.id }}/log" hx-trigger="every 1s" hx-swap="innerHTML"{% endif %}>
+    {% include 'partials/job_log.html' %}
+  </div>
+</section>
+{% endblock %}

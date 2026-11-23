@@ -1,0 +1,151 @@
+/* Dorkbrain Autoindex Theme
+ * Dark theme inspired by CardFlask + GitHub Dark
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+:root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --border-color: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #6e7681;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #a371f7;
+    --shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+
+/* Base layout */
+body {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0;
+    padding: 2rem;
+}
+
+/* Header injected via head.html */
+.ai-header h1 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.8rem;
+    margin: 0 0 1.5rem 0;
+    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+/* Footer injected via foot.html */
+.ai-footer {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+/* File listing table */
+.ai-table {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0.5rem;
+    box-shadow: var(--shadow);
+    display: inline-grid;
+    grid-template-columns: 1fr auto auto;
+    column-gap: 2rem;
+    row-gap: 0;
+    min-width: 600px;
+    max-width: 1200px;
+}
+
+.ai-header-row {
+    display: contents;
+}
+
+.ai-header-row .ai-name,
+.ai-header-row .ai-date,
+.ai-header-row .ai-size {
+    padding: 0.4rem 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 0.25rem;
+}
+
+.ai-row {
+    display: contents;
+}
+
+.ai-row > * {
+    padding: 0.35rem 0.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.9rem;
+    transition: all 0.15s ease;
+    border-radius: 4px;
+}
+
+.ai-row:hover > * {
+    background: var(--bg-tertiary);
+}
+
+.ai-row:hover .ai-name {
+    box-shadow: inset 0 0 8px rgba(0,0,0,0.3), 0 0 6px rgba(88,166,255,0.3);
+}
+
+.ai-name {
+    color: var(--accent-blue);
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ai-date {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+
+.ai-size {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    text-align: right;
+    min-width: 4rem;
+}
+
+/* Directory styling */
+.ai-row[href$="/"] .ai-name {
+    color: var(--accent-green);
+}
+
+.ai-row[href$="/"]:hover .ai-name {
+    color: var(--accent-purple);
+}
+
+/* Parent directory */
+.ai-row[href="../"] .ai-name {
+    color: var(--text-secondary);
+}
+
+/* Hide original pre */
+pre {
+    display: none;
+}
+
+/* nginx autoindex header */
+h1 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.3rem;
+    font-weight: 500;
+    margin: 0 0 1.5rem 0;
+    color: var(--text-secondary);
+}
+
+/* Hide nginx hr */
+hr {
+    display: none;
+}

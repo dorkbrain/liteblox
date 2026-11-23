@@ -1,0 +1,3 @@
+{%- if errors %}<p class="error-text small">{% for k, e in errors.items() %}{{ e }}{% if not loop.last %}; {% endif %}{% endfor %}</p>
+{%- elif not results %}<p class="muted small">No subnet registers its clients yet: the test asks about each registering subnet's domain and reverse zones. Tick <em>register in DNS</em> on a subnet first.</p>
+{%- else %}<ul class="plain small ddns-test">{% for r in results %}<li><span class="dot {{ 'ok' if r.ok else 'warn' }}" aria-hidden="true"></span><code>{{ r.zone }}</code>: {{ r.text }}</li>{% endfor %}</ul>{% endif %}

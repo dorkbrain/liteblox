@@ -1,0 +1,9 @@
+<div class="heading">
+  <h1><a href="/dhcp">DHCP</a> · <code>{{ subnet.prefix }}</code></h1>
+  {% if user.is_admin and tab != 'settings' %}<a class="button secondary" href="/dhcp/subnets/{{ subnet.id }}/reservations/new">Add reservation</a>{% endif %}
+</div>
+<nav class="tabs">
+  <a href="/dhcp/subnets/{{ subnet.id }}" {% if tab == 'overview' %}aria-current="page"{% endif %}>Overview</a>
+  <a href="/dhcp/subnets/{{ subnet.id }}/addresses" {% if tab == 'addresses' %}aria-current="page"{% endif %}>Addresses</a>
+  <a href="/dhcp/subnets/{{ subnet.id }}/settings" {% if tab == 'settings' %}aria-current="page"{% endif %}>Settings</a>
+</nav>

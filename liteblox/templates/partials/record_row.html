@@ -1,0 +1,17 @@
+{% set rname = r.relative_name(zone.origin) %}
+<tr id="row-{{ r.id }}" data-type="{{ r.rtype }}" data-order="{{ r.id }}" data-name="{{ rname }}" data-ttl="{{ r.ttl if r.ttl is not none else '' }}" data-value="{{ r.rdata }}" data-search="{{ (rname ~ ' ' ~ r.rtype ~ ' ' ~ r.rdata ~ ' ' ~ (r.comment or ''))|lower }}"
+    class="{% if changed_ids is defined and r.id in changed_ids %}changed{% endif %}{% if focus is defined and focus == r.id %} focus{% endif %}">
+  {% if user.is_admin %}<td class="select"><input type="checkbox" class="row-select" {% if rr %}name="rr" value="{{ rr[r.id] }}"{% else %}name="ids" value="{{ r.id }}"{% endif %} aria-label="Select {{ rname }} {{ r.rtype }}"></td>{% endif %}
+  <td><code>{{ rname }}</code>{% if not r.owner_explicit %} <span class="muted small" title="inherits the name of the record above">↑</span>{% endif %}</td>
+  <td class="small"{% if r.ttl is not none %} title="{{ r.ttl }} seconds"{% endif %}>{{ r.ttl|duration }}</td>
+  <td><span class="rtype">{{ r.rtype }}</span></td>
+  <td><code>{{ r.rdata }}</code>{% if previews[r.id] %}<div class="muted small">→ {{ previews[r.id] }}</div>{% endif %}</td>
+  <td class="muted small">{{ r.comment or '' }}</td>
+  {% if user.is_admin %}
+  <td class="actions">
+    <button type="button" class="link" hx-get="/zones/{{ zone_name }}/records/{{ r.id }}/edit{% if rr %}?rr={{ rr[r.id] }}{% endif %}" hx-target="closest tr" hx-swap="outerHTML">Edit</button>
+    <button type="button" class="link danger" hx-post="/zones/{{ zone_name }}/records/{{ r.id }}/delete" hx-vals='{"rev": "{{ rev }}"{% if rr %}, "rr": "{{ rr[r.id] }}"{% endif %}}'
+            hx-target="#zone-grid" hx-swap="outerHTML" hx-confirm="Delete {{ rname }} {{ r.rtype }} {{ r.rdata[:60] }}?" data-confirm-ok="Delete">Delete</button>
+  </td>
+  {% endif %}
+</tr>

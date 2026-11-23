@@ -1,0 +1,25 @@
+{% from 'partials/ui.html' import action_bar %}
+{% if not pv %}
+<p class="error">Tick at least one node.</p>
+{% elif pv.blockers %}
+<div class="error" role="alert"><p><strong>These nodes can't be re-adopted as they are:</strong></p>
+  <ul>{% for b in pv.blockers %}<li>{{ b }}</li>{% endfor %}</ul></div>
+{% else %}
+{% for name, diff in pv.diffs.items() %}
+{% if diff %}
+<p class="error" role="alert">{{ name }}: rendering it back from the rebuilt data doesn't give its files (changed by hand on the node, or written by another LiteBlox version). Nothing is recorded.</p>
+<pre class="log">{{ diff }}</pre>
+{% elif pv.older.get(name) %}
+<p class="notice">✓ {{ name }}: every generated file rendered back; {{ pv.older[name]|join(', ') }} written by an older LiteBlox: brought up to date after re-adopt.</p>
+{% else %}
+<p class="notice">✓ {{ name }}: every generated file rendered back byte for byte.</p>
+{% endif %}
+{% endfor %}
+{% for heading, lines in summary %}
+<h3>{{ heading }}</h3>
+<ul class="plain small">{% for line in lines %}<li>{{ line }}</li>{% endfor %}</ul>
+{% endfor %}
+{% if pv.ready %}
+{% call action_bar('/nodes', sticky=True) %}<button type="submit">Re-adopt</button>{% endcall %}
+{% endif %}
+{% endif %}

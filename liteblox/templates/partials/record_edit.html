@@ -1,0 +1,46 @@
+{% set structured = fields.keys()|list %}
+<tr id="row-{{ rec.id if rec else 'new' }}" class="editing" x-data="{ rtype: '{{ form.type }}' }">
+  <td class="select"></td>
+  <td>
+    <input name="name" value="{{ form.name or '' }}" placeholder="@ or host" aria-label="Name" required>
+    {% if errors.name %}<div class="error-text small">{{ errors.name }}</div>{% endif %}
+  </td>
+  <td>
+    <input name="ttl" value="{{ form.ttl if form.ttl is not none else '' }}" placeholder="default" size="6" aria-label="TTL">
+    {% if errors.ttl %}<div class="error-text small">{{ errors.ttl }}</div>{% endif %}
+  </td>
+  <td>
+    <select name="type" x-model="rtype" aria-label="Type">
+      {% for t in types %}<option {% if t == form.type %}selected{% endif %}>{{ t }}</option>{% endfor %}
+      {% if form.type not in types %}<option selected>{{ form.type }}</option>{% endif %}
+    </select>
+    {% if errors.type %}<div class="error-text small">{{ errors.type }}</div>{% endif %}
+  </td>
+  <td>
+    {% for t, flist in fields.items() %}
+    <div class="fieldset-row" x-show="rtype === '{{ t }}'">
+      {% for key, label in flist %}<input name="{{ key }}" value="{{ form[key] or '' }}" placeholder="{{ label }}" aria-label="{{ label }}" {% if key in ('priority', 'srv_priority', 'weight', 'port', 'flags') %}size="5"{% endif %}>{% endfor %}
+    </div>
+    {% endfor %}
+    <div x-show="!{{ structured|tojson|forceescape }}.includes(rtype)">
+      <input name="value" value="{{ form.value or '' }}" placeholder="value" aria-label="Value" class="wide">
+    </div>
+    {% if errors.value %}<div class="error-text small">{{ errors.value }}</div>{% endif %}
+  </td>
+  <td><input name="comment" value="{{ form.comment or '' }}" placeholder="comment" aria-label="Comment">
+    <input type="hidden" name="ptr_field" value="1">
+    <label class="check small ptr-toggle" x-show="rtype === 'A' || rtype === 'AAAA'" title="Also add, change or delete the matching PTR record in the reverse zone, when LiteBlox has it"><input type="checkbox" name="ptr" value="1" {% if auto_ptr %}checked{% endif %}><span>sync PTR</span></label>
+  </td>
+  <td class="actions">
+    <input type="hidden" name="rev" value="{{ rev }}">
+    {% if rr is not none %}<input type="hidden" name="rr" value="{{ rr }}">{% endif %}
+    {% if after %}<input type="hidden" name="after" value="{{ after }}">{% endif %}
+    <button type="button" hx-post="/zones/{{ zone_name }}/records{% if rec %}/{{ rec.id }}{% endif %}" hx-include="closest tr"
+            hx-target="#zone-grid" hx-swap="outerHTML">Save</button>
+    {% if rec %}
+    <button type="button" class="link" hx-get="/zones/{{ zone_name }}/records/{{ rec.id }}/row{% if rr %}?rr={{ rr }}{% endif %}" hx-target="closest tr" hx-swap="outerHTML">Cancel</button>
+    {% else %}
+    <button type="button" class="link" onclick="this.closest('tr').remove()">Cancel</button>
+    {% endif %}
+  </td>
+</tr>

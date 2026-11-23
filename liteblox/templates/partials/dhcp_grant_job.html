@@ -1,0 +1,8 @@
+{# The grant job under a review's "Add the missing grants": polled until it's done, then the review runs again. #}
+{% if not poll %}<div hx-get="/dhcp/grants/{{ job.id }}" hx-trigger="every 1s" hx-swap="innerHTML">{% endif %}
+{% include 'partials/job_log.html' %}
+{% if job.status == 'ok' %}<p class="muted small">Reviewing the form again…</p>
+<div hx-post="/dhcp/subnets/preview" hx-include="#subnet-form" hx-vals='{"granted": "{{ job.id }}"}' hx-target="#subnet-review"
+     hx-swap="innerHTML" hx-trigger="load"></div>
+{% elif job.status != 'running' %}<p class="error small">The grants weren't all added: see the log above, then try again.</p>{% endif %}
+{% if not poll %}</div>{% endif %}

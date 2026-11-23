@@ -1,0 +1,19 @@
+{% extends 'base.html' %}
+{% from 'partials/dhcp_addresses.html' import addresses_table, counts, filter_box, sorting with context %}
+{% block title %}Addresses · {{ subnet.prefix }} · DHCP · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+{% include 'partials/dhcp_subnet_tabs.html' %}
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if done %}<p class="notice">{{ done }}</p>{% endif %}
+{% for e in errors %}<p class="error">{{ e }}</p>{% endfor %}
+<section class="card">
+  <div class="toolbar">{{ filter_box() }}<span class="muted small">{{ counts(tally) }}, read from Kea just now</span>
+    <a class="small" href="/dhcp/subnets/{{ subnet.id }}/addresses.csv" title="Download this table as CSV, read from Kea again">Export CSV</a></div>
+  {% if rows %}{{ addresses_table(rows, subnet, '/dhcp/subnets/' ~ subnet.id ~ '/addresses') }}
+  {% elif not serving %}<p class="muted">No node serves DHCP yet.</p>
+  {% else %}<p class="muted">No leases or reservations yet.{% if user.is_admin %} <a href="/dhcp/subnets/{{ subnet.id }}/reservations/new">Add a reservation</a>, or <strong>Reserve</strong> a client's lease here once it has one.{% endif %}</p>{% endif %}
+</section>
+<p class="muted small">A reservation always gives its client the same address, inside a pool or outside one. <strong>Reserve</strong> on a lease keeps the address it has now.</p>
+{{ sorting() }}
+{% endblock %}

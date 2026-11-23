@@ -1,0 +1,47 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="top" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#b8c9e8"/>
+    </linearGradient>
+    <linearGradient id="left" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#e5edfa"/>
+      <stop offset="100%" stop-color="#879ec6"/>
+    </linearGradient>
+    <linearGradient id="right" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#c1d1ed"/>
+      <stop offset="100%" stop-color="#7188b2"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="64" height="64" fill="#062B70"/>
+
+  <!-- Top face: hollow diamond-shaped rim -->
+  <path d="M32 5 L59 20.5 L32 36 L5 20.5 Z
+           M32 10 L13.7 20.5 L32 31 L50.3 20.5 Z"
+        fill="url(#top)" fill-rule="evenodd"/>
+
+  <!-- Left face: hollow side frame -->
+  <path d="M5 20.5 L32 36 L32 61 L5 45.5 Z
+           M10 24.8 L27 34.6 L27 52.3 L10 42.5 Z"
+        fill="url(#left)" fill-rule="evenodd"/>
+
+  <!-- Right face: hollow side frame -->
+  <path d="M59 20.5 L32 36 L32 61 L59 45.5 Z
+           M54 24.8 L37 34.6 L37 52.3 L54 42.5 Z"
+        fill="url(#right)" fill-rule="evenodd"/>
+
+  <!-- Crisp structural edges -->
+  <g fill="none" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M32 5 L5 20.5 L5 45.5 L32 61"
+          stroke="#f5f8ff" stroke-width="1.2"/>
+    <path d="M32 5 L59 20.5 L59 45.5 L32 61"
+          stroke="#dce7fa" stroke-width="1.2"/>
+    <path d="M5 20.5 L32 36 L59 20.5"
+          stroke="#ffffff" stroke-width="1.2"/>
+    <path d="M32 36 L32 61"
+          stroke="#f5f8ff" stroke-width="1.2"/>
+  </g>
+</svg>

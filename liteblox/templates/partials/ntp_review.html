@@ -1,0 +1,21 @@
+{% from 'partials/diff.html' import diff %}
+<section class="card form-card spaced review">
+  <h2>Review</h2>
+  {% for e in errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+  {% if not errors %}
+  {% for r in results %}
+  <h3>{{ r.node.name }}</h3>
+  {% for p in r.problems %}<pre class="log error">{{ p }}</pre>{% endfor %}
+  {% for n in r.notes or [] %}<p class="notice">{{ n }}</p>{% endfor %}
+  {% if r.diff %}{{ diff(r.diff) }}
+    {% if not r.problems %}<p class="muted small">✓ chrony on {{ r.node.name }} accepts it (<code>chronyd -p</code>).</p>{% endif %}
+  {% elif not r.problems %}<p class="muted small">No change on {{ r.node.name }}.</p>{% endif %}
+  {% else %}<p class="muted">No node runs LiteBlox's time sync yet: saving keeps the sources for when you set one up.</p>
+  {% endfor %}
+  {% if problems %}<p class="muted">Fix the problems above, then review again.</p>
+  {% elif changed or not results %}
+  <p class="muted small">Each node is backed up, then chrony restarts on the new config; if it doesn't come back up, every node this change touched is rolled back, and so is the change here.</p>
+  <div class="inline-actions"><button type="submit">{{ label if results else 'Save' }}</button></div>
+  {% else %}<p class="muted">Nothing to apply.</p>{% endif %}
+  {% endif %}
+</section>

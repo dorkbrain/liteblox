@@ -1,0 +1,49 @@
+{% extends 'base.html' %}
+{% from 'partials/diff.html' import diff as show_diff %}
+{% from 'partials/ui.html' import breadcrumb %}
+{% block title %}Changed outside LiteBlox · {{ node.name }} · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="heading">
+  {{ breadcrumb([('/nodes/' ~ node.id, node.name)], 'Changed outside LiteBlox') }}
+</div>
+{% if second %}
+<section class="card spaced">
+  <p class="error">{{ node.name }} declares {{ second|join(', ') }} as <strong>primary</strong>, but LiteBlox has {{ primary.name if primary else 'another node' }} as the primary. With two primaries, updates and edits land on one and never reach the other.</p>
+  <table>
+    <thead><tr><th>Zone</th><th>{{ primary.name if primary else 'primary' }} serves</th><th>{{ node.name }} serves</th></tr></thead>
+    <tbody>{% for z, ps, ns in serials %}<tr><td><code>{{ z }}</code></td><td>{{ ps or '–' }}</td><td>{{ ns or '–' }}</td></tr>{% endfor %}</tbody>
+  </table>
+  <p class="muted small">Serials are for information: the one LiteBlox records as the primary is the usual choice.</p>
+  <div class="inline-actions">
+    <form method="post" action="/nodes/{{ node.id }}/drift/overwrite" data-confirm="Write LiteBlox's config back on {{ node.name }}, so it is {{ primary.name if primary else 'the primary' }}'s secondary again? Its own changes to these files are lost (it is backed up first)." data-confirm-ok="Overwrite {{ node.name }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <button type="submit">Keep {{ primary.name if primary else 'the primary' }} as the primary (overwrite {{ node.name }})</button>
+    </form>
+    <form method="post" action="/nodes/{{ node.id }}/primary" data-confirm="Promote {{ node.name }} to primary in place of {{ primary.name if primary else 'the current primary' }}? Its dynamic zones start from the newest copy any node has; records only the old primary had are kept in a report." data-confirm-ok="Promote {{ node.name }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <button type="submit" class="secondary">Make {{ node.name }} the primary</button>
+    </form>
+  </div>
+</section>
+{% endif %}
+<section class="card spaced">
+  {% if error %}<p class="error" role="alert">{{ error }}</p>
+  {% elif diff %}
+  <p>Lines starting with <code>-</code> are what LiteBlox wrote; <code>+</code> is what {{ node.name }} has now (key secrets hidden).</p>
+  {{ show_diff(diff) }}
+  {% else %}
+  <p class="muted">{{ node.name }}'s files match LiteBlox's now{% if changed %} (the health check will clear the warning within a minute){% endif %}.</p>
+  {% endif %}
+  {% if user.is_admin and (diff or changed) and not second %}
+  <div class="inline-actions">
+    <form method="post" action="/nodes/{{ node.id }}/drift/overwrite" data-confirm="Write LiteBlox's config back on {{ node.name }}? The changes made there are lost (the node is backed up first, and rolled back if it stops answering)." data-confirm-ok="Overwrite">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <button type="submit">Overwrite with LiteBlox's config</button>
+    </form>
+    {% if keepable %}<a class="button secondary" href="/nodes/{{ node.id }}/drift/keep">Keep the node's change…</a>{% endif %}
+  </div>
+  {% if not keepable %}<p class="muted small">Only changes to options.conf and top.conf can be kept (they become {{ node.name }}'s server settings); the other files are shared by every node or follow its role.</p>{% endif %}
+  {% endif %}
+</section>
+{% endblock %}

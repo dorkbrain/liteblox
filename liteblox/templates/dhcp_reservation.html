@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+{% from 'partials/ui.html' import action_bar %}
+{% from 'partials/settings.html' import setting %}
+{% block title %}Reservation · {{ subnet.prefix }} · LiteBlox{% endblock %}
+{% macro field(name, placeholder='') %}<input id="f-{{ name }}" name="{{ name }}" value="{{ v[name] }}" placeholder="{{ placeholder }}" spellcheck="false" {% if not user.is_admin %}readonly{% endif %}>{% if errors[name] %}<div class="error-text small">{{ errors[name] }}</div>{% endif %}{% endmacro %}
+{% block content %}
+<h1><a href="/dhcp">DHCP</a> · <a href="/dhcp/subnets/{{ subnet.id }}/addresses">{{ subnet.prefix }}</a> · {{ 'Reservation ' ~ (v.ip_address or v.hostname or v.hw_address) if reservation_id else 'Add reservation' }}</h1>
+{% if errors %}<p class="error" role="alert">Not saved: fix the fields marked below.</p>{% endif %}
+<form method="post" action="/dhcp/subnets/{{ subnet.id }}/reservations" id="reservation-form"
+      data-confirm="Apply this reservation? Each DHCP node is backed up, changed and checked; a failure rolls everything back." data-confirm-ok="Apply">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  {% if reservation_id %}<input type="hidden" name="id" value="{{ reservation_id }}">{% endif %}
+  <section class="card form-card settings">
+    <h2>Client</h2>
+    {% call setting('MAC address', 'hw-address', 'The client\'s network card, e.g. <code>aa:bb:cc:dd:ee:ff</code> (dashes or dots work too).', 'f-hw_address') %}{{ field('hw_address', 'aa:bb:cc:dd:ee:ff') }}{% endcall %}
+    {% set named_help = ' Empty, with a hostname: a name-only reservation, so the client gets any pool address and is registered in DNS under the hostname.' if subnet.registers else '' %}
+    {% call setting('IP address', 'ip-address', 'Always given to this client, inside a pool (' ~ subnet.pools|join(', ') ~ ') or outside one: Kea keeps it for this client either way.' ~ named_help, 'f-ip_address') %}{{ field('ip_address', subnet.prefix.split('/')[0]) }}{% endcall %}
+    {% call setting('Hostname', 'hostname', 'Optional: the name the client gets, and is registered under in DNS when the subnet registers clients. Empty: the client\'s own name.', 'f-hostname') %}{{ field('hostname', 'printer') }}{% endcall %}
+    {% call setting('Comment', None, None, 'f-comment') %}{{ field('comment') }}{% endcall %}
+  </section>
+  <section class="card form-card settings spaced">
+    <h2>Options for this client</h2>
+    <p class="muted small page-intro">Empty fields use the subnet's.</p>
+    {% call setting('Router', 'routers', None, 'f-opt_routers') %}{{ field('opt_routers') }}{% endcall %}
+    {% call setting('DNS servers', 'domain-name-servers', None, 'f-opt_dns') %}{{ field('opt_dns') }}{% endcall %}
+    {% call setting('Domain', 'domain-name', None, 'f-opt_domain') %}{{ field('opt_domain') }}{% endcall %}
+    {% call setting('NTP servers', 'ntp-servers', None, 'f-opt_ntp') %}{{ field('opt_ntp') }}{% endcall %}
+  </section>
+  {% if user.is_admin %}
+  <div id="reservation-review"></div>
+  {% call action_bar('/dhcp/subnets/' ~ subnet.id ~ '/addresses', sticky=True) %}<button type="button" hx-post="/dhcp/subnets/{{ subnet.id }}/reservations/preview" hx-include="#reservation-form"
+    hx-target="#reservation-review" hx-swap="innerHTML show:#reservation-review:top">Review changes</button>{% endcall %}
+  {% endif %}
+</form>
+<script>
+  (function () {
+    const form = document.getElementById('reservation-form');
+    form && form.addEventListener('input', function () { const r = document.getElementById('reservation-review'); if (r) r.innerHTML = ''; });
+  })();
+</script>
+{% if user.is_admin and reservation_id %}
+<section class="card form-card settings spaced danger-zone">
+  <h2>Danger zone</h2>
+  {% call setting('Delete this reservation', None, 'The client keeps its address until its lease ends; after that it gets one from the pool.') %}
+    <form method="post" action="/dhcp/subnets/{{ subnet.id }}/reservations/{{ reservation_id }}/delete" class="inline-actions"
+          data-confirm="Delete the reservation {{ v.ip_address or 'of the name ' ~ v.hostname }} for {{ v.hw_address }}?" data-confirm-ok="Delete">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button type="submit" class="danger">Delete reservation</button>
+    </form>
+  {% endcall %}
+</section>
+{% endif %}
+{% endblock %}

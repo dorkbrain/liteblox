@@ -1,0 +1,40 @@
+{#- The top bar: base.html and the API docs page (which can't load app.css: it would restyle Swagger). -#}
+  <header class="topbar">
+    <a class="brand" href="/">LiteBlox</a>
+    <nav>
+      {% set h = health(request) %}{% set on = modules_on(request) %}
+      <a href="/" {% if request.url.path == '/' %}aria-current="page"{% endif %} title="{{ 'all good' if h[0] == 'ok' else h[1] ~ ' thing' ~ ('' if h[1] == 1 else 's') ~ ' need attention' }}"><span class="dot {{ h[0] }}" id="health-dot" aria-hidden="true"></span>Dashboard</a>
+      {% if on.dns %}<a href="/zones" {% if request.url.path.startswith('/zones') %}aria-current="page"{% endif %}>Zones</a>{% endif %}
+      <a href="/nodes" {% if request.url.path.startswith('/nodes') or request.url.path.startswith('/jobs') %}aria-current="page"{% endif %}>Nodes</a>
+      {% if on.dhcp %}<a href="/dhcp" {% if request.url.path.startswith('/dhcp') %}aria-current="page"{% endif %}>DHCP</a>{% endif %}
+      {% if on.ipam %}<a href="/ipam" {% if request.url.path.startswith('/ipam') %}aria-current="page"{% endif %}>IPAM</a>{% endif %}
+      <details class="nav-menu">
+        <summary {% if request.url.path.startswith('/tools') %}aria-current="page"{% endif %}>Tools</summary>
+        <div class="nav-menu-panel">
+          <a href="/tools/subnets" target="_blank" rel="noopener">Subnet Reference</a>
+          <a href="/tools/subnet-calculator" target="_blank" rel="noopener">Subnet Calculator</a>
+        </div>
+      </details>
+      {% if user.is_admin %}<a href="/settings" {% if request.url.path.startswith('/settings') %}aria-current="page"{% endif %}>Settings</a>{% endif %}
+      {% if user.is_admin %}<a href="/users" {% if request.url.path.startswith('/users') or request.url.path.startswith('/audit') %}aria-current="page"{% endif %}>Users</a>{% endif %}
+      <a href="/help" {% if request.url.path.startswith('/help') %}aria-current="page"{% endif %}>Help</a>
+    </nav>
+    {% if request.url.path != '/search' %}{# the Search page has its own box #}
+    <form class="search" method="get" action="/search" role="search">
+      <input type="search" name="q" id="search-box" placeholder="Search" aria-label="Search names, addresses and MACs" title="Search every zone and DHCP (press /)">
+    </form>
+    {% endif %}
+    <div class="who">
+      <button type="button" id="theme-toggle" class="link theme-toggle" data-theme-choice="auto" title="Theme: Auto (follows the system)" aria-label="Theme: Auto (follows the system)">
+        {#- topbar.js sets data-theme-choice; the CSS shows the matching icon -#}
+        <svg class="t-auto" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor"/></svg>
+        <svg class="t-light" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <svg class="t-dark" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+      </button>
+      <a href="/account" title="My account" {% if request.url.path == '/account' %}aria-current="page"{% endif %}>{{ user.username }}</a> {% if not user.is_admin %}<span class="badge" title="this account can look but not change anything">read-only</span>{% endif %}
+      <form method="post" action="/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+        <button class="link" type="submit">Log out</button>
+      </form>
+    </div>
+  </header>

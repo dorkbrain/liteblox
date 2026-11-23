@@ -1,0 +1,89 @@
+{% extends 'base.html' %}
+{% block title %}{{ node.name }} server settings · LiteBlox{% endblock %}
+{% from 'partials/settings.html' import setting %}
+{% from 'partials/ui.html' import breadcrumb, action_bar %}
+{% macro list_field(field, placeholder, rows=2) %}<textarea id="f-{{ field }}" name="{{ field }}" rows="{{ rows }}" spellcheck="false" placeholder="{{ placeholder }}" {% if not user.is_admin %}readonly{% endif %}>{{ v[field] }}</textarea>{% endmacro %}
+{% block content %}
+<div class="heading">
+  {% call breadcrumb([('/nodes/' ~ node.id, node.name)], 'Server settings') %}{% if node.role %} <span class="pill">{{ node.role }}</span>{% endif %}{% endcall %}
+  {% if user.is_admin and node.managed and others %}
+  <form method="get" action="/nodes/{{ node.id }}/settings" class="inline-actions copy-from">
+    <label for="copy-from" class="small">Start from</label>
+    <select id="copy-from" name="copy">{% for n in others %}<option value="{{ n.id }}" {% if source and source.id == n.id %}selected{% endif %}>{{ n.name }}</option>{% endfor %}</select>
+    <button type="submit" class="secondary">Copy settings</button>
+  </form>
+  {% endif %}
+</div>
+{% if not node.managed %}
+<section class="card"><p class="muted">LiteBlox doesn't manage this node's BIND config yet. <a href="/nodes/{{ node.id }}/takeover">Take it over</a> first.</p></section>
+{% else %}
+<p class="muted small page-intro">Leave a field empty, or a choice on "not set", for BIND's default. Lists take one item per line: addresses, networks, <a href="/settings/acls">ACL</a> names, <code>key NAME</code>; a <code>!</code> in front excludes.</p>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if kept %}<p class="notice">Filled in from the <strong>options.conf / top.conf</strong> on {{ node.name }}, as they were changed outside LiteBlox. Review and apply to keep that change as {{ node.name }}'s server settings.</p>{% endif %}
+{% if source %}<p class="notice">Filled in from <strong>{{ source.name }}</strong>'s settings. Nothing changes on {{ node.name }} until you review and apply. <a href="/nodes/{{ node.id }}/settings">Start again from {{ node.name }}'s own</a></p>{% endif %}
+{% set ro = not user.is_admin %}
+<form method="post" action="/nodes/{{ node.id }}/settings" id="node-settings"
+      data-confirm="Apply these server settings? Each node is backed up, changed and checked; if one stops answering, every node is rolled back." data-confirm-ok="Apply">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+
+  <section class="card form-card settings">
+    <h2>Recursion and forwarding</h2>
+    {% call setting('Recursion', 'recursion', 'Off makes the node authoritative only: it answers for its own zones and nothing else.', 'f-recursion') %}
+      <select id="f-recursion" name="recursion" {% if ro %}disabled{% endif %}>
+        {% for c in choices.recursion %}<option value="{{ c }}" {% if v.recursion == c %}selected{% endif %}>{{ {'': 'not set (BIND: yes)', 'yes': 'yes', 'no': 'no'}[c] }}</option>{% endfor %}</select>
+    {% endcall %}
+    {% call setting('Who may recurse', 'allow-recursion', 'Forwarding-only zones follow this too.', 'f-allow_recursion') %}{{ list_field('allow_recursion', 'BIND default: localnets, localhost') }}{% endcall %}
+    {% call setting('Forwarders', 'forwarders', 'An IP address per line, optionally followed by <code>port N</code>. Empty: resolve from the root servers.', 'f-forwarders') %}{{ list_field('forwarders', 'none') }}{% endcall %}
+    {% call setting("If they don't answer", 'forward', None, 'f-forward') %}
+      <select id="f-forward" name="forward" {% if ro %}disabled{% endif %}>
+        {% for c in choices.forward %}<option value="{{ c }}" {% if v.forward == c %}selected{% endif %}>{{ {'': 'not set (BIND: look it up the normal way)', 'first': 'look it up the normal way (first)', 'only': 'fail (only)'}[c] }}</option>{% endfor %}</select>
+    {% endcall %}
+  </section>
+
+  <section class="card form-card settings spaced">
+    <h2>DNSSEC</h2>
+    {% call setting('Validation', 'dnssec-validation', '<code>auto</code> uses the built-in root key.', 'f-dnssec_validation') %}
+      <select id="f-dnssec_validation" name="dnssec_validation" {% if ro %}disabled{% endif %}>
+        {% for c in choices.dnssec_validation %}<option value="{{ c }}" {% if v.dnssec_validation == c %}selected{% endif %}>{{ c or 'not set (BIND: auto)' }}</option>{% endfor %}</select>
+    {% endcall %}
+    {% call setting("Don't validate", 'validate-except', 'One domain per line, e.g. a private domain you forward elsewhere.', 'f-validate_except') %}{{ list_field('validate_except', 'none') }}{% endcall %}
+  </section>
+
+  <section class="card form-card settings spaced">
+    <h2>Who can reach it</h2>
+    {% call setting('Answer queries from', 'allow-query', 'LiteBlox warns before a change that would shut out its own address.', 'f-allow_query') %}{{ list_field('allow_query', 'BIND default: any') }}{% endcall %}
+    {% call setting('Listen on IPv4', 'listen-on', None, 'f-listen_on') %}{{ list_field('listen_on', 'BIND default: any') }}{% endcall %}
+    {% call setting('Listen on IPv6', 'listen-on-v6', None, 'f-listen_on_v6') %}{{ list_field('listen_on_v6', 'BIND default: any') }}{% endcall %}
+  </section>
+
+  <details class="card form-card settings spaced" {% if v.extra or v.top_extra %}open{% endif %}>
+    <summary><h2>Extra statements</h2> <span class="muted small">{% if v.extra or v.top_extra %}in use{% else %}none{% endif %}</span></summary>
+    <p class="muted small">For anything without a field above, written as it is. The node's <code>named-checkconf</code> checks it; paths, <code>include</code> and code-loading statements are refused.</p>
+    {% call setting('Inside options', 'options { … }', None, 'f-extra') %}{{ list_field('extra', 'minimal-responses yes;', 4) }}{% endcall %}
+    {% call setting('Top level', None, 'logging, statistics-channels, …', 'f-top_extra') %}{{ list_field('top_extra', '', 4) }}{% endcall %}
+  </details>
+
+  {% if user.is_admin %}
+  <div id="settings-review"></div>
+  {% set also %}{% if others %}
+    <fieldset class="plain also-apply"><legend class="small">Also apply to</legend>
+      {% for n in others %}<label class="check"><input type="checkbox" name="also" value="{{ n.id }}" {% if n.id|string in chosen %}checked{% endif %}><span>{{ n.name }}{% if n.role %} <span class="muted small">{{ n.role }}</span>{% endif %}</span></label>{% endfor %}
+    </fieldset>{% endif %}{% endset %}
+  {% call action_bar('/nodes/' ~ node.id, sticky=True, lead=also) %}<button type="button" hx-post="/nodes/{{ node.id }}/settings/preview" hx-include="#node-settings"
+              hx-target="#settings-review" hx-swap="innerHTML show:#settings-review:top">Review changes</button>{% endcall %}
+  {% endif %}
+</form>
+<script>
+  // a review is of the values as they were; editing a field afterwards clears it
+  (function () {
+    const form = document.getElementById('node-settings');
+    if (!form) return;
+    form.addEventListener('input', function (e) {
+      if (e.target.name === 'apply_anyway') return;
+      const review = document.getElementById('settings-review');
+      if (review && review.innerHTML.trim()) review.innerHTML = '';
+    });
+  })();
+</script>
+{% endif %}
+{% endblock %}

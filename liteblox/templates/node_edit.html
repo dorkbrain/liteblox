@@ -1,0 +1,19 @@
+{% extends 'base.html' %}
+{% from 'partials/ui.html' import action_bar %}
+{% block title %}Change {{ node.name }} · LiteBlox{% endblock %}
+{% block content %}
+<h1>Change address or host key</h1>
+<section class="card form-card">
+  <p class="muted">LiteBlox reads the SSH host key at this address, shows it next to the one pinned for <strong>{{ node.name }}</strong>, and pins it once you confirm. Leave the address as it is to re-pin the key of a reinstalled or replaced server.</p>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="/nodes/{{ node.id }}/edit" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <label>Address (IP or hostname LiteBlox connects to) <input name="host" value="{{ form.host }}" required autofocus></label>
+    <div class="row">
+      <label>SSH port <input name="ssh_port" type="number" value="{{ form.ssh_port }}" min="1" max="65535"></label>
+      <label>Agent port <input name="agent_port" type="number" value="{{ form.agent_port }}" min="1" max="65535"></label>
+    </div>
+    {% call action_bar('/nodes/' ~ node.id) %}<button type="submit">Read host key</button>{% endcall %}
+  </form>
+</section>
+{% endblock %}

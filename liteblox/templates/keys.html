@@ -1,0 +1,68 @@
+{% extends 'base.html' %}
+{% from 'partials/ui.html' import empty, action_bar %}
+{% from 'partials/settings.html' import setting %}
+{% block title %}TSIG keys · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+{% set tab = 'keys' %}{% include 'partials/settings_tabs.html' %}
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+<p class="muted small page-intro">Keys sign zone transfers and dynamic updates. Give DHCP and ACME clients a key of their own, then grant it what it may change in which zone; a grant takes effect while the zone is <a href="/help/dynamic">dynamic</a>. Every key is written to <code>keys.conf</code> on each node LiteBlox has taken over.</p>
+
+{% for k in keys %}
+{% set kg = grants.get(k.id, []) %}
+<section class="card form-card settings {% if not loop.first %}spaced{% endif %}" id="key-{{ k.name }}">
+  <div class="heading"><h2><code>{{ k.name }}</code></h2>
+    <span>{% if k.name in internal %}<span class="pill">LiteBlox's own</span>{% elif k.purpose == 'imported' %}<span class="pill">imported</span>{% else %}<span class="pill">client key</span>{% endif %}
+      <span class="muted small">{{ k.algorithm }}</span></span></div>
+  {% if k.name in internal %}
+  <p class="muted small">{{ 'Signs zone transfers from the primary to its secondaries.' if k.name == 'liteblox-xfr' else "LiteBlox reads dynamic zones with it (AXFR) and sends grid edits as updates; every dynamic zone grants it the whole zone." }} Its secret never leaves LiteBlox and its nodes.</p>
+  {% else %}
+  {% for g in kg %}
+  {% call setting(g.zone) %}
+    <div class="setting-line">
+      <span>{{ {'zonesub': 'the whole zone', 'subdomain': 'names under ' ~ g.name, 'name': 'only ' ~ g.name}[g.scope] }}: <code>{{ g.types }}</code></span>
+      {% if not g.dynamic %}<span class="pill warn" title="the zone isn't dynamic">inactive</span>{% endif %}
+      <form method="post" action="/settings/keys/grants/{{ g.id }}/revoke" data-confirm="Revoke {{ k.name }}'s grant on {{ g.zone }}?" data-confirm-ok="Revoke">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+        <button type="submit" class="secondary small">Revoke</button></form>
+    </div>
+  {% endcall %}
+  {% else %}<p class="muted small">No grants: this key can't update anything yet.</p>{% endfor %}
+  {% call setting('Grant a zone', None, 'Record types separated by spaces, e.g. <code>A AAAA DHCID</code> for DHCP or <code>TXT</code> for ACME; <code>ANY</code> for all.', 'g-zone-' ~ k.id) %}
+    <form method="post" action="/settings/keys/{{ k.name }}/grants" class="grant-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <select id="g-zone-{{ k.id }}" name="zone" aria-label="Zone">{% for z in zones %}<option value="{{ z.name }}">{{ z.name }}{% if not z.dynamic %} (static){% endif %}</option>{% endfor %}</select>
+      <select name="scope" aria-label="What in the zone">
+        <option value="zonesub">the whole zone</option><option value="subdomain">names under…</option><option value="name">only the name…</option></select>
+      <input name="owner" placeholder="_acme-challenge.example.lab" aria-label="Name (for names under / only the name)" spellcheck="false">
+      <input name="types" value="ANY" aria-label="Record types" spellcheck="false">
+      <button type="submit" class="secondary">Grant</button>
+    </form>
+  {% endcall %}
+  <div class="card-actions">
+    <span class="muted small">Added {{ k.created_at|localtime }}</span>
+    <span class="inline-actions">
+      <form method="post" action="/settings/keys/{{ k.name }}/rotate" data-confirm="Replace the secret of {{ k.name }}? The old one stops working on every node; you'll see the new one once." data-confirm-ok="Replace">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button type="submit" class="secondary">Replace secret</button></form>
+      <form method="post" action="/settings/keys/{{ k.name }}/delete" data-confirm="Delete key {{ k.name }}{% if kg %} and its {{ kg|length }} grant(s){% endif %} from every node?" data-confirm-ok="Delete">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button type="submit" class="danger">Delete</button></form>
+    </span>
+  </div>
+  {% endif %}
+</section>
+{% else %}
+<section class="card">{{ empty('No keys yet. LiteBlox adds its own when you pick a primary; add a client key below.') }}</section>
+{% endfor %}
+
+<form method="post" action="/settings/keys" class="card form-card settings spaced">
+  <h2>Add a client key</h2>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  {% call setting('Name', None, 'What the client puts in its config, e.g. <code>dhcp</code> or <code>acme-web</code>.', 'k-name') %}
+    <input id="k-name" name="name" value="{{ form.name or '' }}" required spellcheck="false">
+  {% endcall %}
+  {% call setting('Algorithm', None, None, 'k-alg') %}
+    <select id="k-alg" name="algorithm">{% for a in algorithms %}<option value="{{ a }}" {% if (form.algorithm or 'hmac-sha256') == a %}selected{% endif %}>{{ a }}</option>{% endfor %}</select>
+  {% endcall %}
+  {% call action_bar(note="You'll see the secret once, right after it's created.") %}<button type="submit">Add key</button>{% endcall %}
+</form>
+{% endblock %}

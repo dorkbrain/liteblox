@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+{% from 'partials/charts.html' import sparkline, meter %}
+{% block title %}{{ subnet.prefix }} · DHCP · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{# an option this subnet sets, else the DHCP settings' (marked so) #}
+{% macro option(label, key) %}{% set own = subnet.options.get(key) %}{% set value = own or globals.options.get(key) %}
+<dt>{{ label }}</dt><dd>{% if value %}{{ value|join(', ') if value is not string else value }}{% if not own %} <span class="muted small">(DHCP settings)</span>{% endif %}{% else %}<span class="muted">–</span>{% endif %}</dd>{% endmacro %}
+{% block content %}
+{% include 'partials/dhcp_subnet_tabs.html' %}
+{% if ddns and ddns.grants %}<p class="notice"><span class="pill warn">missing grants</span> The DNS registration key isn't granted everything these names need: review the <a href="/dhcp/subnets/{{ subnet.id }}/settings#dns">DNS registration</a> and add them.</p>{% endif %}
+<div class="grid">
+  <section class="card">
+    <h2>In use</h2>
+    {% if size %}
+    <div class="pool-head"><span>{{ subnet.pools|join(', ') }}</span><span class="num">{% if in_pool is none %}no figures yet{% else %}{{ in_pool|int }} / {{ size }}{% endif %}</span></div>
+    {{ meter(pct, (in_pool|int ~ ' of ' ~ size ~ ' addresses in the pools') if in_pool is not none else '') }}
+    {% else %}<p class="muted">No pool.</p>{% endif %}
+    <dl class="facts spaced">
+      <dt>Active leases</dt><dd>{{ active|int if active is not none else '–' }}{% if active is not none and in_pool is not none and active - in_pool > 0 %} <span class="muted small">({{ (active - in_pool)|int }} outside the pools)</span>{% endif %}</dd>
+      <dt>Reservations</dt><dd>{{ subnet.reservations|length }}</dd>
+    </dl>
+    <p class="small"><a href="/dhcp/subnets/{{ subnet.id }}/addresses">Addresses</a> lists every lease and reservation.</p>
+  </section>
+  <section class="card">
+    <h2>Active leases</h2>
+    {% for label, hours, spark in graphs %}
+    <div class="graph"><span class="muted small">{{ label }}{% if spark %} · peak {{ spark.peak|int }}{% endif %}</span>{{ sparkline(spark, subnet.prefix ~ ' active leases', hours) }}</div>
+    {% endfor %}
+    <p class="muted small">The health check counts them every minute.</p>
+  </section>
+  <section class="card">
+    <h2>Serving</h2>
+    <dl class="facts">
+      <dt>Interface</dt><dd><code>{{ subnet.interface }}</code></dd>
+      <dt>Served by</dt><dd>{% for n in servers %}<a href="/nodes/{{ n.id }}#dhcp">{{ n.name }}</a>{% if pair.active %} <span class="pill {{ 'ready' if pair.role_of(n.id) == 'primary' }}">{{ pair.role_of(n.id) }}</span>{% endif %}{% if not loop.last %}, {% endif %}{% else %}<span class="pill warn">not served yet</span> <span class="muted">tick {{ subnet.interface }}{% if pair.active %} on {{ pair.primary_name }}{% endif %} under <a href="/dhcp">Servers</a> → Change interfaces</span>{% endfor %}</dd>
+      {{ option('Router', 'routers') }}
+      {{ option('DNS servers', 'dns') }}
+      {{ option('Domain', 'domain') }}
+      {{ option('NTP servers', 'ntp') }}
+      <dt>Lease time</dt><dd>{{ (subnet.valid_lifetime or globals.valid_lifetime or 7200)|duration }}</dd>
+      <dt>DNS names</dt><dd>{% if subnet.registers %}registered as <code>host.{{ subnet.qualifying_suffix }}</code>{% else %}<span class="muted">not registered</span>{% endif %}</dd>
+      {% if subnet.comment %}<dt>Comment</dt><dd>{{ subnet.comment }}</dd>{% endif %}
+    </dl>
+  </section>
+</div>
+{% endblock %}

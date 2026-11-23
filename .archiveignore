@@ -1,0 +1,18 @@
+# local-only working notes and Claude context
+WIP/
+CLAUDE.local.md
+
+# where releases go, and the names that must not go public: Forgejo only, never in the public source
+.publish
+.private-names
+
+# local test environment state
+testenv/data/
+testenv/backups/
+
+# real zone files used by round-trip tests (internal DNS data)
+tests/fixtures/private/
+
+.pytest_cache/
+.ruff_cache/
+*.egg-info/

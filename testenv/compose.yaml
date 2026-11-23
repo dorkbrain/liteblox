@@ -1,0 +1,18 @@
+# Local test run of the freshly built image: ./deploy/deploy.py --build first.
+services:
+  liteblox:
+    image: localhost/liteblox:latest
+    container_name: liteblox-test
+    user: "1000:1000"
+    userns_mode: "keep-id"
+    environment:
+      - TZ=America/Detroit
+    volumes:
+      - ./data:/data:Z
+      - ./backups:/backups:Z
+    ports:
+      - "127.0.0.1:53530:53530"
+    healthcheck:   # podman's default OCI image format drops the Dockerfile HEALTHCHECK
+      test: liteblox healthcheck   # string form: podman-compose 1.0.x mangles the exec array form
+      interval: 30s
+      timeout: 3s

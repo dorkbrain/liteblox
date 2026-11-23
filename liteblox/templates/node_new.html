@@ -1,0 +1,32 @@
+{% extends 'base.html' %}
+{% from 'partials/ui.html' import action_bar %}
+{% block title %}Add node · LiteBlox{% endblock %}
+{% block content %}
+<h1>Add node</h1>
+<section class="card form-card">
+  <p class="notice small">New server? Follow <a href="/help/node-prep">Preparing a node</a> first: static IP, packages, a setup account and firewall openings.</p>
+  <p class="muted">LiteBlox connects to the node's SSH port to read its host key, which you confirm next. Nothing is installed yet.</p>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="/nodes/new" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <label>Name <input name="name" value="{{ form.name or '' }}" placeholder="ns1" required autofocus></label>
+    <label>Address (IP or hostname LiteBlox connects to) <input name="host" value="{{ form.host or '' }}" placeholder="192.168.1.10" required></label>
+    <div class="row">
+      <label>SSH port <input name="ssh_port" type="number" value="{{ form.ssh_port or 22 }}" min="1" max="65535"></label>
+      <label>Agent port <input name="agent_port" type="number" value="{{ form.agent_port or 8530 }}" min="1" max="65535"></label>
+    </div>
+    <input type="hidden" name="services" value="1">
+    {% if dns_on %}
+    <fieldset x-data="{ bind: {{ 'true' if form.bind else 'false' }} }">
+      <legend>What it runs</legend>
+      <label class="check"><input type="checkbox" name="bind" value="1" x-model="bind" {% if form.bind %}checked{% endif %}>
+        <span><strong>Runs DNS (BIND)</strong>: LiteBlox sets up BIND there and can take over its config.</span></label>
+      <p class="small muted" x-show="!bind" x-cloak>No BIND: LiteBlox leaves DNS on this node alone. Choose DHCP or Time at setup, or neither for a <strong>scanner</strong>: just the agent, which IPAM reads (who's on the networks it is on) and sweeps through. <a href="/help/node-prep">What a node needs</a></p>
+    </fieldset>
+    {% else %}
+    <p class="small muted">The DNS module is off, so this node gets no BIND. Choose DHCP or Time at setup, or neither for a <strong>scanner</strong>: just the agent, which IPAM reads and sweeps through.</p>
+    {% endif %}
+    {% call action_bar('/nodes') %}<button type="submit">Read host key</button>{% endcall %}
+  </form>
+</section>
+{% endblock %}

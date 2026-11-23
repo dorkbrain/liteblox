@@ -1,0 +1,123 @@
+LiteBlox: installing without a registry
+=======================================
+
+For running LiteBlox from files someone handed you, with no image registry
+involved. The normal install (pulling the image) is in the app's help pages,
+under Installing and upgrading; everything there applies once LiteBlox runs.
+
+Each release comes as these files. One of them is enough:
+
+  liteblox-image-v<ver>-amd64.tar.gz   the ready-built image for x86-64
+                                       (most PCs, servers, VMs), to load
+                                       as it is (simplest)
+  liteblox-image-v<ver>-arm64.tar.gz   the same for 64-bit ARM (a
+                                       Raspberry Pi 4 or 5 with a 64-bit
+                                       OS, other ARM boards)
+  liteblox-src-v<ver>.tgz              the source with its Dockerfile, to
+                                       build the image yourself (needs
+                                       internet access for the Python
+                                       packages)
+
+uname -m tells you which image: x86_64 is amd64, aarch64 is arm64. 32-bit
+ARM (armv7l) isn't supported. Both images load as the same name.
+
+A .sha256.txt file next to each checks the download:
+
+  sha256sum -c liteblox-image-v4.7.0-amd64.tar.gz.sha256.txt
+
+The examples use 4.7.0 on x86-64; use the version and image you were
+given. With podman, every docker command below works as podman (podman
+load, podman build, podman compose).
+
+
+1. Get the image
+----------------
+
+From the image file:
+
+  docker load -i liteblox-image-v4.7.0-amd64.tar.gz
+  # prints: Loaded image: localhost/liteblox:4.7.0
+
+Or from the source:
+
+  mkdir -p /opt/liteblox/src && cd /opt/liteblox/src
+  tar xzf ~/liteblox-src-v4.7.0.tgz          # unpacks into ./liteblox
+  docker build -t localhost/liteblox:4.7.0 liteblox
+
+Either way you end up with the image localhost/liteblox:4.7.0.
+
+
+2. Run it
+---------
+
+Make a folder for LiteBlox (for example /srv/liteblox) and save this in it as
+docker-compose.yaml:
+
+  services:
+    liteblox:
+      image: localhost/liteblox:4.7.0
+      container_name: liteblox
+      restart: unless-stopped
+      user: "1000:1000"          # ./data and ./backups must be owned by uid 1000
+      # userns_mode: "keep-id"   # rootless podman only: keeps the folders owned by you
+      environment:
+        - TZ=America/Detroit     # your time zone
+        # - FORWARDED_ALLOW_IPS=x.x.x.x   # your reverse proxy, if any
+      volumes:
+        - ./data:/data
+        - ./backups:/backups
+      ports:
+        - "53530:53530"
+        - "53443:53443"          # HTTPS, once it's on in Settings → HTTPS
+      healthcheck:
+        test: liteblox healthcheck
+        interval: 30s
+        timeout: 3s
+
+Then:
+
+  cd /srv/liteblox
+  mkdir -p data backups
+  sudo chown 1000:1000 data backups
+  docker compose up -d
+  docker compose ps                # "healthy" after about 30 seconds
+  docker compose exec liteblox liteblox user add admin
+
+and browse to http://HOST:53530. The in-app help (the ? in the top bar)
+covers the rest: HTTPS (built in, or behind a proxy), preparing the nodes,
+what to back up.
+
+
+3. Upgrading
+------------
+
+1. Back up first: stop LiteBlox (docker compose stop) and copy ./data
+   somewhere safe. It holds everything LiteBlox knows; treat it as secret.
+2. Load or build the new version, as in step 1:
+     docker load -i liteblox-image-v4.7.0-amd64.tar.gz
+3. Change the image line in docker-compose.yaml:
+     image: localhost/liteblox:4.7.0
+4. Start it:
+     docker compose up -d
+   Database changes are applied on start.
+5. If the Nodes page marks nodes "upgrade", click Upgrade agent there
+   (over mutual TLS, no SSH). A node without that button needs
+   Repair / upgrade agent on its page; coming from before 4.5, every node
+   needs that once.
+6. To use LiteBlox's own HTTPS (new in 4.6, off until you turn it on in
+   Settings -> HTTPS), add the - "53443:53443" line under ports: as in
+   section 2 (Run it), and run docker compose up -d again.
+
+Skipping versions is fine (3.3 straight to 4.0, say): every database change
+in between is applied in order on start. Read the release notes of each
+version you skip; one Repair / upgrade agent per node covers them all.
+
+Going back: put the old version's image line back and run
+docker compose up -d. If the new version changed the database, restore the
+./data copy from step 1 first (the release notes say when it does). Since
+4.0 an older version refuses to start on a database a newer one changed
+(ERROR: the database (...) is schema vN, written by a newer LiteBlox).
+
+Once the new version runs well, the old image can go:
+
+  docker image rm localhost/liteblox:4.1.1

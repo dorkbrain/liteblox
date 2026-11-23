@@ -1,0 +1,79 @@
+{% extends 'ipam_base.html' %}
+{% from 'partials/ui.html' import action_bar %}
+{% block title %}Settings · {{ network.label }} · IPAM · LiteBlox{% endblock %}
+{% set base = '/ipam/networks/' ~ network.id %}
+{% block ipam %}
+<h1>{% for p in path %}<a href="/ipam/networks/{{ p.id }}">{{ p.label }}</a> · {% endfor %}<a href="{{ base }}">{{ network.label }}</a> · Settings</h1>
+
+<section class="card form-card">
+  <h2>Network</h2>
+  <form method="post" action="{{ base }}/settings" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <p class="small muted">Network <code>{{ network.prefix }}</code>. To change it, add the new network and delete this one.</p>
+    <div class="row">
+      <label>Name <input name="name" value="{{ network.name }}" placeholder="{{ network.prefix }}"></label>
+      <label>Comment <input name="comment" value="{{ network.comment }}"></label>
+    </div>
+    <h3>Sweep</h3>
+    <p class="small muted">Probe every address now and then through a node on this network, so quiet devices show up in <a href="/ipam/seen">Devices seen</a>. 64 at a time, 10 a second. <a href="/help/ipam#the-sweep">More in Help</a>.</p>
+    <div class="row">
+      <label>How often <select name="sweep">{% for v, t in [('off', 'Off'), ('hourly', 'Hourly'), ('daily', 'Daily')] %}<option value="{{ v }}"{% if network.sweep == v %} selected{% endif %}>{{ t }}</option>{% endfor %}</select></label>
+      <label>From <select name="sweep_node"><option value="">the first node on it (a scanner if there is one)</option>{% for n in sweep_nodes %}<option value="{{ n.id }}"{% if network.sweep_node_id == n.id %} selected{% endif %}>{{ n.name }}{% if not (n.bind or n.dhcp or n.ntp) %} (scanner){% endif %}</option>{% endfor %}</select></label>
+    </div>
+    <p class="small muted">{% if sweep_problem %}{{ sweep_problem|capitalize }}.{% elif network.swept_at %}Last swept {{ network.swept_at|localtime }}.{% else %}Not swept yet.{% endif %}</p>
+    {% call action_bar(cancel=base) %}<button type="submit">Save</button>{% endcall %}
+  </form>
+  {% if not sweep_problem %}
+  <form method="post" action="{{ base }}/sweep" class="spaced" data-confirm="Sweep {{ network.prefix }} now? It probes every address from a node on it, as a job." data-confirm-ok="Sweep">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button type="submit" class="secondary">Sweep now</button></form>
+  {% endif %}
+</section>
+
+{% if not network.container %}
+<section class="card spaced">
+  <h2>Ranges</h2>
+  <p class="small muted">Name parts of the network: static hosts, infrastructure, addresses kept back. DHCP pools come from the DHCP subnets here and change there.</p>
+  {% if ranges %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>First</th><th>Last</th><th>Kind</th><th>Name</th><th>Comment</th><th></th></tr></thead>
+    <tbody>{% for r in ranges %}
+    <tr>
+      <td><code>{{ r.first }}</code></td><td><code>{{ r.last }}</code></td>
+      <td>{{ kinds.get(r.kind, 'DHCP pool') }}</td><td>{{ r.name }}</td><td class="small">{{ r.comment }}</td>
+      <td class="actions small">{% if r.dhcp %}<a href="/dhcp/subnets/{{ r.subnet_id }}/settings">in DHCP</a>{% else %}
+        <a href="?edit={{ r.id }}#range-form">Edit</a>
+        <form method="post" action="{{ base }}/ranges/{{ r.id }}/delete" class="inline" data-confirm="Delete the range {{ r.first }} – {{ r.last }}? Its addresses and their records stay as they are." data-confirm-ok="Delete">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button type="submit" class="link danger small">Delete</button></form>{% endif %}</td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}<p class="muted">No ranges yet.</p>{% endif %}
+
+  {% set editing = edit_range or (request.query_params.get('edit')|int if request.query_params.get('edit', '').isdigit() else None) %}
+  {% set er = (ranges|selectattr('id', 'equalto', editing)|first) if editing else None %}
+  {% set f = range_form or ({'first': er.first, 'last': er.last, 'kind': er.kind, 'name': er.name, 'comment': er.comment} if er else {}) %}
+  <form method="post" action="{{ base }}/ranges" class="stack spaced" id="range-form">
+    <h3 class="small">{{ 'Change the range' if editing else 'Add a range' }}</h3>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    {% if editing %}<input type="hidden" name="range_id" value="{{ editing }}">{% endif %}
+    <div class="row">
+      <label>First address <input name="first" value="{{ f.first or '' }}" required placeholder="{{ network.hosts_range()[0] }}">{% if range_errors.first %}<span class="error-text small">{{ range_errors.first }}</span>{% endif %}</label>
+      <label>Last address <input name="last" value="{{ f.last or '' }}" placeholder="the first, for one address">{% if range_errors.last %}<span class="error-text small">{{ range_errors.last }}</span>{% endif %}</label>
+      <label>Kind <select name="kind">{% for key, label in kinds.items() %}<option value="{{ key }}"{% if f.kind == key %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    </div>
+    <div class="row">
+      <label>Name <input name="name" value="{{ f.name or '' }}" placeholder="Servers"></label>
+      <label>Comment <input name="comment" value="{{ f.comment or '' }}"></label>
+    </div>
+    {% call action_bar(cancel=(base ~ '/settings') if editing else None) %}<button type="submit">{{ 'Save range' if editing else 'Add range' }}</button>{% endcall %}
+  </form>
+</section>
+{% endif %}
+
+<section class="card spaced danger-zone">
+  <h2>Delete</h2>
+  <p class="small">Takes {{ network.prefix }} out of IPAM{% if not network.container %} with its ranges and{% endif %}{% if network.container %}: the networks inside it move up a level, and{% endif %} nothing else: DNS records, DHCP and IPAM notes stay as they are.</p>
+  <form method="post" action="{{ base }}/delete" data-confirm="Take {{ network.prefix }} out of IPAM?" data-confirm-ok="Delete">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button type="submit" class="danger">Delete network</button>
+  </form>
+</section>
+{% endblock %}

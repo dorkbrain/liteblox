@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+{% block title %}Import · LiteBlox{% endblock %}
+{% block content %}
+<h1>Import from {{ node.name }}</h1>
+{% for r in results %}
+<section class="card spaced">
+  <h2><code>{{ r.zone }}</code>
+    {% if r.action == 'imported' %}<span class="pill ready">imported</span>
+    {% elif r.action == 'linked' %}<span class="pill ready">linked</span>
+    {% elif r.action == 'conflict' %}<span class="pill warn">differs</span>
+    {% else %}<span class="pill error">error</span>{% endif %}</h2>
+  {% if r.action == 'imported' %}<p>Added to LiteBlox and committed to the zone history.</p>{% endif %}
+  {% if r.action == 'linked' %}<p>Already in LiteBlox with identical content; {{ node.name }} now serves it too.</p>{% endif %}
+  {% if r.warning %}<p class="{{ 'error' if r.action == 'error' else 'notice' }}">{{ r.warning }}</p>{% endif %}
+  {% if r.action == 'conflict' %}
+  <p>LiteBlox already has this zone, and {{ node.name }}'s copy is different. Which copy is right?</p>
+  <pre class="log diff">{{ r.diff }}</pre>
+  <form method="post" action="/nodes/{{ node.id }}/import/resolve" class="inline-actions">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="zone" value="{{ r.zone }}"><input type="hidden" name="sha256" value="{{ r.sha256 }}">
+    <button name="choice" value="node">Use {{ node.name }}'s copy</button>
+    <button name="choice" value="liteblox" class="secondary">Keep LiteBlox's copy ({{ node.name }} gets it on the next publish)</button>
+  </form>
+  {% endif %}
+</section>
+{% endfor %}
+<p><a class="button secondary" href="/nodes/{{ node.id }}">Back to {{ node.name }}</a></p>
+{% endblock %}

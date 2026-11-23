@@ -1,0 +1,35 @@
+{% extends 'base.html' %}
+{% block title %}Re-adopt nodes · LiteBlox{% endblock %}
+{% block content %}
+<h1>Re-adopt nodes</h1>
+<section class="card">
+  <p>When LiteBlox's data is lost (the container's volume, say) but its nodes keep running, a new LiteBlox can rebuild what it knew from them: every key with its secret, the ACLs, each node's server settings, the zones with their grants and contents, the primary and its secondaries, on DHCP nodes the subnets, reservations, the failover pair and where clients are registered in DNS, and on time nodes the time sources. Nodes without BIND come back from their Kea and chrony config alone. It goes ahead only when rendering the config back from the rebuilt data gives every node's files byte for byte, so nothing on the nodes changes. The one exception is a DHCP failover pair, which gets new certificates from this LiteBlox's CA. <a href="/help/backups#disaster-recovery">How it works</a></p>
+  <p class="small">Not recovered: users (beyond the ones made here), the audit log, each zone's history before now, drafts, LiteBlox's list of backups, and comments on DHCP subnets and reservations, and IPAM (networks, ranges, IPAM records). Restoring a backup of the data volume keeps all of that, so prefer it when you have one.</p>
+</section>
+{% if not_fresh %}
+<section class="card spaced">
+  <p class="error" role="alert">Re-adopting only rebuilds into an empty LiteBlox: {{ not_fresh|join('; ') }}.</p>
+</section>
+{% elif not candidates %}
+<section class="card spaced">
+  <p class="muted">No node reports a config from another LiteBlox. Add the old nodes (Nodes → Add node), run <strong>Set up / Repair</strong> on each (without taking it over), and come back here.</p>
+</section>
+{% else %}
+<section class="card spaced">
+  <form method="post" action="/nodes/readopt" id="readopt-form"
+        data-confirm="Re-adopt the ticked nodes? LiteBlox records what they run; a DHCP failover pair gets new certificates." data-confirm-ok="Re-adopt">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <h2>Nodes</h2>
+    <p class="muted small">Tick every node the old LiteBlox managed: the primary and its secondaries, and both nodes of a DHCP failover pair, are read together.</p>
+    {% for n in candidates %}
+    <label class="check"><input type="checkbox" name="node" value="{{ n.id }}" checked>
+      <span><a href="/nodes/{{ n.id }}">{{ n.name }}</a> <code>{{ n.host }}</code></span></label>
+    {% endfor %}
+    <div class="inline-actions"><button type="button" class="secondary" hx-post="/nodes/readopt/preview" hx-include="#readopt-form"
+      hx-target="#readopt-review" hx-swap="innerHTML" hx-indicator="#readopt-wait">Preview</button>
+      <span id="readopt-wait" class="htmx-indicator muted small">Reading the nodes and rendering their config back…</span></div>
+    <div id="readopt-review"></div>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

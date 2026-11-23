@@ -1,0 +1,182 @@
+<script>
+    // User‑configurable favicon filename (must exist in .autoindex/)
+    const AI_FAVICON = "favicon.svg";
+
+    // Icon font theme: "mdi", "fa", "bs", or "" (disabled)
+    const AI_FONT_THEME = "fa";
+</script>
+<link id="ai-favicon" rel="icon" href="">
+
+<style>
+    body {
+        opacity: 0;
+        transition: opacity 0.1s ease-in;
+    }
+    body.ai-ready {
+        opacity: 1;
+    }
+</style>
+
+<link id="ai-style" rel="stylesheet" href="">
+
+<script>
+    // Load icon font based on AI_FONT_THEME
+    if (AI_FONT_THEME === "mdi") {
+        document.write('<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css">');
+    } else if (AI_FONT_THEME === "fa") {
+        document.write('<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">');
+    } else if (AI_FONT_THEME === "bs") {
+        document.write('<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">');
+    }
+</script>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    // Icon mappings for each font library
+    const iconMaps = {
+        mdi: {
+            folder: 'mdi mdi-folder',
+            parent: 'mdi mdi-folder-upload',
+            default: 'mdi mdi-file',
+            archive: 'mdi mdi-folder-zip',
+            image: 'mdi mdi-file-image',
+            video: 'mdi mdi-file-video',
+            audio: 'mdi mdi-file-music',
+            code: 'mdi mdi-file-code',
+            pdf: 'mdi mdi-file-pdf-box',
+            doc: 'mdi mdi-file-word',
+            xls: 'mdi mdi-file-excel',
+            text: 'mdi mdi-file-document'
+        },
+        fa: {
+            folder: 'fas fa-folder',
+            parent: 'fas fa-folder-open',
+            default: 'far fa-file',
+            archive: 'fas fa-file-archive',
+            image: 'far fa-file-image',
+            video: 'far fa-file-video',
+            audio: 'far fa-file-audio',
+            code: 'far fa-file-code',
+            pdf: 'far fa-file-pdf',
+            doc: 'far fa-file-word',
+            xls: 'far fa-file-excel',
+            text: 'far fa-file-alt'
+        },
+        bs: {
+            folder: 'bi bi-folder-fill',
+            parent: 'bi bi-folder-symlink-fill',
+            default: 'bi bi-file-earmark',
+            archive: 'bi bi-file-earmark-zip',
+            image: 'bi bi-file-earmark-image',
+            video: 'bi bi-file-earmark-play',
+            audio: 'bi bi-file-earmark-music',
+            code: 'bi bi-file-earmark-code',
+            pdf: 'bi bi-file-earmark-pdf',
+            doc: 'bi bi-file-earmark-word',
+            xls: 'bi bi-file-earmark-excel',
+            text: 'bi bi-file-earmark-text'
+        }
+    };
+
+    const extMap = {
+        archive: ['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'],
+        image: ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'svg', 'webp', 'ico'],
+        video: ['mp4', 'avi', 'mkv', 'mov', 'wmv', 'flv', 'webm'],
+        audio: ['mp3', 'wav', 'flac', 'ogg', 'm4a', 'wma'],
+        code: ['js', 'py', 'java', 'c', 'cpp', 'h', 'cs', 'php', 'rb', 'go', 'rs', 'html', 'css', 'json', 'xml', 'sh'],
+        pdf: ['pdf'],
+        doc: ['doc', 'docx', 'odt', 'rtf'],
+        xls: ['xls', 'xlsx', 'ods', 'csv'],
+        text: ['txt', 'md', 'log', 'cfg', 'conf', 'ini']
+    };
+
+    function getIcon(name, isDir, isParent) {
+        if (!AI_FONT_THEME || AI_FONT_THEME === "") return '';
+
+        const icons = iconMaps[AI_FONT_THEME];
+        if (!icons) return '';
+
+        if (isParent) return `<i class="${icons.parent}"></i> `;
+        if (isDir) return `<i class="${icons.folder}"></i> `;
+
+        const ext = name.split('.').pop().toLowerCase();
+        for (const [type, exts] of Object.entries(extMap)) {
+            if (exts.includes(ext)) {
+                return `<i class="${icons[type]}"></i> `;
+            }
+        }
+        return `<i class="${icons.default}"></i> `;
+    }
+
+    // --- Resolve CSS path relative to the autoindex root ---
+    const style = document.getElementById('ai-style');
+    if (style) {
+        const segments = window.location.pathname.split('/').filter(Boolean);
+        const root = '/' + (segments[0] || '');  // e.g. "/files"
+        style.href = root + '/.autoindex/style.css';
+    }
+
+    const pre = document.querySelector('pre');
+    if (!pre) return;
+
+    const table = document.createElement('div');
+    table.className = 'ai-table';
+
+    const header = document.createElement('div');
+    header.className = 'ai-header-row';
+    header.innerHTML = `
+        <span class="ai-name">Name</span>
+        <span class="ai-date">Date</span>
+        <span class="ai-size">Size</span>
+    `;
+    table.appendChild(header);
+
+    const text = pre.textContent;
+    const links = pre.querySelectorAll('a');
+
+    links.forEach(link => {
+        const href = link.getAttribute('href');
+        const name = link.textContent;
+
+        const idx = text.indexOf(name);
+        const lineEnd = text.indexOf('\n', idx);
+        const line = lineEnd > idx ? text.substring(idx + name.length, lineEnd).trim() : '';
+
+        const parts = line.split(/\s{2,}/);
+        const date = parts[0] || '';
+        const size = parts[1] || '';
+
+        const isDir = href.endsWith('/');
+        const isParent = href === '../';
+        const icon = getIcon(name, isDir, isParent);
+
+        const row = document.createElement('a');
+        row.className = 'ai-row';
+        row.href = href;
+
+        row.innerHTML = `
+            <span class="ai-name">${icon}${name}</span>
+            <span class="ai-date">${date}</span>
+            <span class="ai-size">${size}</span>
+        `;
+
+        table.appendChild(row);
+    });
+
+    pre.style.display = 'none';
+    pre.parentNode.insertBefore(table, pre);
+
+    // --- Resolve favicon path relative to autoindex root ---
+    const favicon = document.getElementById('ai-favicon');
+    if (favicon) {
+        const segments = window.location.pathname.split('/').filter(Boolean);
+        const root = '/' + (segments[0] || '');  // e.g. "/files"
+        favicon.href = root + '/.autoindex/' + AI_FAVICON;
+    }
+
+    // Smooth fade-in
+    requestAnimationFrame(() => {
+        document.body.classList.add('ai-ready');
+    });
+});
+</script>

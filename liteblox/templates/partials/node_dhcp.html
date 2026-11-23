@@ -1,0 +1,30 @@
+<h2>DHCP (Kea)</h2>
+{% if error %}<p class="error">{{ error }}</p>
+{% else %}
+{% set kea = status.kea or {} %}
+{% if not kea.installed or not node.dhcp %}
+<p class="muted">{% if kea.installed %}Kea is installed, but LiteBlox didn't set it up here.{% else %}Not set up.{% endif %}
+  LiteBlox can install Kea here with a config that serves nothing until you add a subnet.</p>
+{% if user.is_admin %}<p><a class="button secondary" href="/nodes/{{ node.id }}/bootstrap?dhcp=1">Set up DHCP</a></p>{% endif %}
+{% else %}
+{% if drift %}<p class="notice"><span class="pill warn">changed outside LiteBlox</span> {{ drift|join(', ') }} differ{{ 's' if drift|length == 1 }} from what LiteBlox wrote.</p>
+{% if diff %}<details><summary>The changes</summary><pre class="log">{{ diff }}</pre></details>{% endif %}{% endif %}
+<dl class="facts">
+  <dt>Kea</dt><dd>{{ kea.version or 'version unknown' }}</dd>
+  {% for service, label in [('dhcp4', 'kea-dhcp4'), ('d2', 'DDNS (D2)')] %}{% set s = kea.services[service] %}
+  <dt>{{ label }}</dt><dd>{% if s.running %}<span class="pill ready">running</span> <span class="muted small">pid {{ s.pid }}, up {{ s.uptime|duration }}{% if s.reload is not none %}, config loaded {{ s.reload|duration }} ago{% endif %}</span>{% if s.sockets and s.sockets.status != 'ready' %}
+    <br><span class="pill {{ 'warn' if s.sockets.status == 'retrying' else 'error' }}">{{ 'not listening yet, retrying' if s.sockets.status == 'retrying' else 'not listening' }}</span> <span class="small">{{ (s.sockets.errors or [])|join('; ') }}</span>{% endif %}
+    {% else %}<span class="pill error">not answering</span> <span class="small">{{ s.error }}</span>{% endif %}</dd>
+  {% endfor %}
+  <dt>Serving</dt><dd>{% if served %}{% for name in served %}<div><code>{{ name }}</code>: {% for s in subnets if s.interface == name %}<a href="/dhcp/subnets/{{ s.id }}"><code>{{ s.prefix }}</code></a>{% if not loop.last %}, {% endif %}{% else %}<span class="muted">no subnet yet</span>{% endfor %}</div>{% endfor %}
+    {% else %}no interface: nothing answers DHCP{% endif %} <a class="small" href="/dhcp">DHCP</a></dd>
+  <dt>Interfaces</dt><dd>{% for i in status.interfaces or [] %}<div><code>{{ i.name }}</code> {{ i.addresses|join(', ') or 'no address' }}{% if not i.up %} <span class="pill warn">down</span>{% endif %}
+    {% for a in i.addresses %}{% if a.split('/')[0] in own %} <span class="pill">management (LiteBlox reaches the node here)</span>{% endif %}{% endfor %}</div>{% endfor %}</dd>
+</dl>
+{% if user.is_admin %}
+<form class="card-foot" method="post" action="/nodes/{{ node.id }}/dhcp/rewrite" data-confirm="Write LiteBlox's Kea config to {{ node.name }} again{% if drift %}, replacing the changes made there{% endif %}? It's backed up first, and Kea reloads it." data-confirm-ok="{{ 'Overwrite' if drift else 'Rewrite' }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  <button type="submit" class="{{ '' if drift else 'secondary' }}">{{ 'Overwrite the changes' if drift else 'Rewrite DHCP config' }}</button>
+</form>{% endif %}
+{% endif %}
+{% endif %}

@@ -1,0 +1,62 @@
+{#- Every IPAM page: the network tree on the left (a picker above the content on a phone), the page beside it. -#}
+{% extends 'base.html' %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="ipam-layout">
+  <aside class="ipam-tree" aria-label="Networks">
+    <div class="tree-top">
+      <h2 class="small"><a href="/ipam" class="tree-head{% if request.url.path == '/ipam' %} on{% endif %}"{% if request.url.path == '/ipam' %} aria-current="page"{% endif %} title="All networks">Networks</a></h2>
+      {#- topbar.js keeps the choice per browser and sets aria-expanded and the title #}
+      <button type="button" class="tree-toggle" data-ipam-tree-toggle aria-expanded="true" aria-controls="tree-full" title="Collapse the network list" aria-label="Collapse the network list"><span class="when-open" aria-hidden="true">«</span><span class="when-shut" aria-hidden="true">»</span></button>
+    </div>
+    {#- collapsed: one square per network, its usage as the fill, its name in the tooltip #}
+    <ul class="plain tree-mini">
+      <li><a href="/ipam" class="sq glyph{% if request.url.path == '/ipam' %} on{% endif %}" title="All networks" aria-label="All networks">▦</a></li>
+      {% for n in networks %}{% set u = use[n.id] %}{% set tip = n.prefix ~ (' · ' ~ n.name if n.name else '') ~ (' · ' ~ n.children|length ~ ' network' ~ ('' if n.children|length == 1 else 's') if n.container else (' · ' ~ u[0] ~ ' of ' ~ u[1] ~ ' in use')) %}
+      <li><a href="/ipam/networks/{{ n.id }}" class="sq{% if n.container %} box{% endif %}{% if current and current.id == n.id %} on{% endif %}"{% if current and current.id == n.id %} aria-current="page"{% endif %} title="{{ tip }}" aria-label="{{ tip }}"{% if not n.container %} style="--fill: {{ (100 * u[0] / u[1])|round(1) if u[1] else 0 }}%"{% endif %}></a></li>
+      {%- endfor %}
+      <li class="sq-foot"><a href="/ipam/seen" class="sq glyph{% if request.url.path == '/ipam/seen' %} on{% endif %}" title="Devices seen" aria-label="Devices seen">◎</a></li>
+    </ul>
+    <div class="tree-full" id="tree-full">
+    {% if networks %}
+    <ul class="plain">{% for n in networks %}{% set u = use[n.id] %}
+      <li style="--depth: {{ n.depth }}"><a href="/ipam/networks/{{ n.id }}" class="tree-node{% if current and current.id == n.id %} on{% endif %}"{% if current and current.id == n.id %} aria-current="page"{% endif %}>
+        {%- if n.container %}<strong>{{ n.label }}</strong>{% else %}{{ n.label }}{% endif %}
+        <small class="muted">{% if n.name %}{{ n.prefix }}{% endif %}{% if n.container %}{% if n.name %} · {% endif %}{{ n.children|length }} network{{ '' if n.children|length == 1 else 's' }}{% endif %}</small>
+        {%- if not n.container %}<span class="mini-bar" title="{{ u[0] }} of {{ u[1] }} addresses in use"><i style="width: {{ (100 * u[0] / u[1])|round(1) if u[1] else 0 }}%"></i></span>{% endif %}</a></li>
+    {%- endfor %}</ul>
+    {% else %}<p class="muted small">None yet.</p>{% endif %}
+    {% if suggestions and user.is_admin %}
+    <div class="tree-suggest">
+      <h2 class="small muted">Not in IPAM yet</h2>
+      {% for s in suggestions %}
+      <form method="post" action="/ipam/networks">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="prefix" value="{{ s.prefix }}">
+        <span><code>{{ s.prefix }}</code><small class="muted">{{ 'DHCP' if s.source == 'dhcp' else 'zone' }}: {{ s.why }}</small></span>
+        <button type="submit" class="secondary small">Add</button>
+      </form>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div class="tree-foot">
+      <a href="/ipam/seen" class="tree-node{% if request.url.path == '/ipam/seen' %} on{% endif %}"{% if request.url.path == '/ipam/seen' %} aria-current="page"{% endif %}>Devices seen</a>
+    </div>
+    </div>
+  </aside>
+  <div class="ipam-main">
+    {% if networks or request.url.path == '/ipam/seen' %}
+    <label class="ipam-picker">Network
+      <select onchange="if (this.value) location.href = this.value">
+        <option value="/ipam">All networks</option>
+        <option value="/ipam/seen"{% if request.url.path == '/ipam/seen' %} selected{% endif %}>Devices seen</option>
+        {% for n in networks %}<option value="/ipam/networks/{{ n.id }}"{% if current and current.id == n.id %} selected{% endif %}>{{ '  ' * n.depth }}{{ n.label }}{% if n.name %} · {{ n.prefix }}{% endif %}</option>{% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    {% for e in errors %}<p class="notice small">{{ e }}</p>{% endfor %}
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    {% if done %}<p class="notice">{{ done }}</p>{% endif %}
+    {% block ipam %}{% endblock %}
+  </div>
+</div>
+{% endblock %}

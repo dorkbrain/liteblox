@@ -1,0 +1,64 @@
+{% extends 'base.html' %}
+{% block title %}{{ zone_name }} history · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+{% include 'partials/zone_tabs.html' %}
+{% set shas = commits|map(attribute='sha')|list %}
+<form method="get" action="/zones/{{ zone_name }}/compare" id="compare-form">
+{% if deploys %}
+<section class="card spaced">
+  <h2>Publishes</h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th></th><th>#</th><th>When</th><th>Who</th><th>Result</th><th>Serial</th><th>Message</th></tr></thead>
+    <tbody>
+    {% for d in deploys %}
+    <tr><td>{% if d.commit_sha in shas %}<input type="checkbox" name="v" value="{{ d.commit_sha }}" aria-label="Compare publish #{{ d.id }}">{% endif %}</td>
+      <td><a href="/zones/{{ zone_name }}/deploys/{{ d.id }}">#{{ d.id }}</a></td><td class="small">{{ d.created_at|localtime }}</td><td>{{ d.username }}</td>
+      <td><span class="pill {{ 'ready' if d.status == 'ok' else ('running' if d.status == 'running' else 'error') }}">{{ d.status }}</span></td>
+      <td class="small">{{ d.serial or '' }}</td><td class="small">{{ d.message or '' }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endif %}
+<section class="card table-wrap spaced">
+  <h2>Versions</h2>
+  <table>
+    <thead><tr><th></th><th>When</th><th>Who</th><th>What</th></tr></thead>
+    <tbody>
+    {% for c in commits %}
+    <tr><td><input type="checkbox" name="v" value="{{ c.sha }}" aria-label="Compare {{ c.subject }}"></td>
+      <td class="small">{{ c.date|localtime }}</td><td>{{ c.author }}</td><td><a href="/zones/{{ zone_name }}/history/{{ c.sha }}">{{ c.subject }}</a></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{# sticks to the bottom of the window, so it stays beside the boxes you tick #}
+<div class="action-bar compare-bar">
+  <span class="muted small" id="compare-hint">Tick two publishes or versions to see everything that changed between them.</span>
+  {% if error == 'pick-two' %}<span class="error-text small">Pick exactly two.</span>{% endif %}
+  <div class="inline-actions"><button type="submit" disabled>Compare</button></div>
+</div>
+</form>
+<script>
+  // a publish and its version are the same commit: tick both together, and allow Compare at exactly two
+  (function () {
+    const form = document.getElementById('compare-form');
+    const button = form.querySelector('button[type="submit"]');
+    const hint = document.getElementById('compare-hint');
+    form.addEventListener('change', function (e) {
+      if (e.target.name !== 'v') return;
+      form.querySelectorAll('input[name="v"]').forEach(function (box) {
+        if (box.value === e.target.value) box.checked = e.target.checked;
+      });
+      const picked = new Set(Array.from(form.querySelectorAll('input[name="v"]:checked')).map(function (b) { return b.value; }));
+      button.disabled = picked.size !== 2;
+      hint.textContent = picked.size === 2 ? 'Compare the two you picked (older → newer).'
+        : picked.size > 2 ? 'Untick some: pick exactly two.'
+        : 'Tick ' + (2 - picked.size) + ' more.';
+    });
+  })();
+</script>
+{% endblock %}

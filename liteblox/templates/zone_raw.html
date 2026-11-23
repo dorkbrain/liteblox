@@ -1,0 +1,18 @@
+{% extends 'base.html' %}
+{% block title %}{{ zone_name }} raw · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+{% include 'partials/zone_tabs.html' %}
+<section class="card">
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  {% if unsorted %}<p class="notice">LiteBlox keeps every zone sorted, but this one can't be ({{ unsorted }}), so it keeps its own order. Write those lines out as records (or move them under the zone's own <code>$ORIGIN</code>) and the next save sorts it. <a href="/help/editing#records-are-kept-sorted">More</a></p>{% endif %}
+  {% if dynamic %}<p class="muted small">The zone as named serves it now (read by zone transfer). It's dynamic, so named owns the file: change records in the grid, where each edit is sent as an update.</p>
+  {% else %}<p class="muted small">The whole zone file{% if is_draft %} (draft){% endif %}. Saving updates the draft; nothing is published until you review and publish. Line endings are kept as the file has them.</p>{% endif %}
+  <form method="post" action="/zones/{{ zone_name }}/raw" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="rev" value="{{ rev }}">
+    <textarea name="text" class="zone-text" spellcheck="false" {% if not user.is_admin or dynamic %}readonly{% endif %}>{{ text }}</textarea>
+    {% if user.is_admin and not dynamic %}<div><button type="submit">Save draft</button></div>{% endif %}
+  </form>
+</section>
+{% endblock %}

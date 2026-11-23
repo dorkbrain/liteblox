@@ -1,0 +1,5 @@
+{#- One Check's answer (POST /ipam/check), in place of the button. -#}
+{%- if r.replied %}<span class="pill warn" title="through {{ node.name }}">answers{% if r.rtt_ms is not none %} ({{ r.rtt_ms }} ms){% endif %}</span>{% if r.mac %} <code class="small">{{ r.mac }}</code>{% endif %}
+{#- a MAC confirmed during the probe answered ARP; an older STALE entry proves nothing -#}
+{%- elif r.mac and r.confirmed is not none and r.confirmed <= elapsed %}<span class="pill warn" title="through {{ node.name }}">no ping reply, but {{ r.mac }} answers ARP</span>
+{%- else %}<span class="pill ready" title="through {{ node.name }} ({{ method }})">nothing answers</span>{% endif %}

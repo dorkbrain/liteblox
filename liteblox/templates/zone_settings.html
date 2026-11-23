@@ -1,0 +1,175 @@
+{% extends 'base.html' %}
+{% from 'partials/ui.html' import action_bar %}
+{% from 'partials/settings.html' import setting %}
+{% block title %}{{ zone_name }} settings · LiteBlox{% endblock %}
+{% block content %}
+{% include 'partials/zone_tabs.html' %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% set ro = not user.is_admin %}
+
+<section class="card form-card settings" id="nodes">
+  <h2>Nodes</h2>
+  {% for n in nodes %}
+  {% call setting(n.name) %}
+    <div class="setting-line">
+      {% if n.role == 'primary' %}<span class="pill">primary</span>{% elif n.role == 'secondary' %}<span class="pill">secondary</span>{% endif %}
+      {% if forwarding %}<span>forwards it</span>{% if recursion_off.get(n.id) %} <span class="pill warn">recursion is off, so it forwards for nobody</span>{% endif %}
+      {% elif n.in_sync is none %}<span>transfers it from the primary</span>
+      {% elif n.in_sync %}<span class="pill ready">published copy</span>{% else %}<span class="pill warn">needs publish</span>{% endif %}
+      {% if not n.managed %}<span class="pill warn">not taken over</span>{% endif %}
+      <a class="small" href="/nodes/{{ n.id }}{{ '/settings' if forwarding else '' }}">{{ 'server settings' if forwarding else 'node' }} →</a>
+    </div>
+    <p class="setting-help">{% if forwarding %}{{ recursion.get(n.id, '')|capitalize }}.{% else %}<code>{{ n.node_file }}</code>{% endif %}</p>
+  {% endcall %}
+  {% else %}<p class="muted">No node serves this zone yet.</p>{% endfor %}
+  {% if user.is_admin and candidates %}
+  {% call setting('Add a node', None, 'A secondary transfers the zone from the primary; any other node gets the published copy.' if not forwarding else 'It forwards the zone the same way.', 'add-node') %}
+    <form method="post" action="/zones/{{ zone_name }}/nodes/add" class="inline-actions">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <select id="add-node" name="node_id">{% for c in candidates %}<option value="{{ c.id }}">{{ c.name }}{% if c.role == 'secondary' %} (secondary){% endif %}</option>{% endfor %}</select>
+      <button type="submit" class="secondary">Add node</button>
+    </form>
+  {% endcall %}
+  {% endif %}
+</section>
+
+{% if forwarding %}
+<form method="post" action="/zones/{{ zone_name }}/forwarders" class="card form-card settings spaced" id="forwarding">
+  <h2>Forwarding</h2>
+  <p class="muted small">The nodes above send queries for <code>{{ zone_name }}</code> and the names under it to these servers instead of looking them up the normal way.</p>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  {% call setting('Forwarders', 'forwarders', 'An IP address per line, optionally followed by <code>port N</code>.', 'f-forwarders') %}
+    <textarea id="f-forwarders" name="forwarders" rows="3" spellcheck="false" {% if ro %}readonly{% endif %}>{{ zone_row.forwarders }}</textarea>
+  {% endcall %}
+  {% call setting("If they don't answer", 'forward', None, 'f-forward_mode') %}
+    <select id="f-forward_mode" name="forward_mode" {% if ro %}disabled{% endif %}>
+      {% for v, label in [('only', 'fail (only)'), ('first', 'look it up the normal way (first)'), ('', 'not set (BIND: look it up the normal way)')] %}
+      <option value="{{ v }}" {% if zone_row.forward_mode == v %}selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select>
+  {% endcall %}
+  {% if user.is_admin %}{% call action_bar(note='Each node is backed up first.') %}<button type="submit">Save and apply to nodes</button>{% endcall %}{% endif %}
+</form>
+{% else %}
+
+<section class="card form-card settings spaced">
+  <h2>Editing</h2>
+  {% call setting('Sync PTR records', None, 'Adding, changing or deleting an A/AAAA record here also updates the matching reverse zone, when LiteBlox has it; both are reviewed and published together. A PTR that already points somewhere else is never overwritten.', 'f-auto_ptr') %}
+    <form method="post" action="/zones/{{ zone_name }}/autoptr" class="setting-toggle">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <label class="check"><input id="f-auto_ptr" type="checkbox" name="auto_ptr" value="1" {% if zone_row.auto_ptr %}checked{% endif %} {% if ro %}disabled{% endif %}><span>Keep PTR records in step</span></label>
+      {% if user.is_admin %}<button type="submit" class="secondary small">Save</button>{% endif %}
+    </form>
+  {% endcall %}
+</section>
+
+{% if not forwarding %}
+<section class="card form-card settings spaced" id="notes">
+  <h2>Notes</h2>
+  {% call setting('Notes', None, "Anything worth remembering about this zone: what a group of names is for, who to ask. Kept in LiteBlox only, never in the zone file; comment lines a sort takes out of the file land here when the draft is published.", 'f-notes') %}
+    {% if user.is_admin %}<form method="post" action="/zones/{{ zone_name }}/notes" class="stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <textarea id="f-notes" name="notes" rows="{{ [[(zone_row.notes or '').count('\n') + 2, 4]|max, 16]|min }}" spellcheck="true">{{ zone_row.notes or '' }}</textarea>
+      <div><button type="submit" class="secondary small">Save notes</button></div>
+    </form>{% elif zone_row.notes %}<pre class="notes">{{ zone_row.notes }}</pre>{% else %}<span class="muted">none</span>{% endif %}
+  {% endcall %}
+</section>
+{% endif %}
+
+<section class="card form-card settings spaced" id="dynamic">
+  <h2>Dynamic updates</h2>
+  {% if zone_row.dynamic %}
+  {% call setting('Dynamic updates', None, 'Edits in the grid are sent to the primary as updates and apply at once; so do updates from a key granted below (DHCP, ACME). named owns the file, so LiteBlox keeps the history from what it serves: a version after each LiteBlox edit, and a daily snapshot of other changes.') %}
+    <div class="setting-line"><span class="pill ready">on</span></div>
+  {% endcall %}
+  {% else %}
+  {% call setting('Dynamic updates', None, 'Lets DHCP, ACME and other clients with a granted key change records with RFC 2136 updates. Grid edits then apply at once instead of going through Review. named rewrites the file from then on, so comments and the record order are lost.') %}
+    <div class="setting-line"><span class="pill">off</span></div>
+  {% endcall %}
+  {% endif %}
+  {% call setting('Keys that may update it', None, 'LiteBlox itself always may. Grants only take effect while the zone is dynamic. <a href="/settings/keys">Manage keys and grants</a>') %}
+    {% if grants %}<ul class="plain small">{% for g in grants %}<li><code>{{ g.key }}</code>: {{ {'zonesub': 'the whole zone', 'subdomain': 'names under ' ~ g.name, 'name': g.name}[g.scope] }}, {{ g.types }}{% if not zone_row.dynamic %} <span class="muted">(inactive)</span>{% endif %}</li>{% endfor %}</ul>
+    {% else %}<div class="setting-line muted">none</div>{% endif %}
+  {% endcall %}
+  {% if user.is_admin %}
+  <form method="post" action="/zones/{{ zone_name }}/dynamic" class="card-actions"
+        {% if zone_row.dynamic %}data-confirm="Switch {{ zone_name }} back to a static file? What named serves now becomes the published copy, and updates from other keys stop." data-confirm-ok="Switch off"
+        {% else %}data-confirm="Switch {{ zone_name }} to dynamic updates? named will rewrite the file: comments and record order are lost." data-confirm-ok="Switch on"{% endif %}>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    {% if zone_row.dynamic %}
+    <span class="muted small">Back to a static file you edit and publish.</span>
+    <input type="hidden" name="dynamic" value="off"><button type="submit" class="secondary">Switch off</button>
+    {% elif dynamic_blocker %}
+    <span class="muted small">{{ dynamic_blocker }}</span><button type="submit" disabled>Switch on</button>
+    {% else %}
+    <span class="muted small">Each node is backed up first.</span>
+    <input type="hidden" name="dynamic" value="on"><button type="submit">Switch on</button>
+    {% endif %}
+  </form>
+  {% endif %}
+</section>
+
+{% if zone_row.dynamic %}
+<section class="card form-card settings spaced" id="reclaim">
+  <h2>Stale DHCP names</h2>
+  <form method="post" action="/zones/{{ zone_name }}/reclaim">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    {% call setting('Reclaim them', None, 'Once an hour, delete the names Kea registered here (with their PTR) that no live lease or reservation has, once their lease ended longer ago than the time below. Nothing goes while DHCP is unhealthy, or when more than a quarter of the names (and at least 4) would go at once: that waits for you in Needs attention. <a href="/help/dynamic#stale-dhcp-names">More</a>', 'f-reclaim') %}
+      <label class="check"><input id="f-reclaim" type="checkbox" name="reclaim" value="1" {% if zone_row.reclaim %}checked{% endif %} {% if ro %}disabled{% endif %}><span>Reclaim stale DHCP names</span></label>
+    {% endcall %}
+    {% call setting('After', None, 'How long after its lease ended a name counts as stale: seconds or 30m, 12h, 1d. Empty: the longest lease time of the subnets registering here (' ~ (reclaim_default|duration) ~ ').', 'f-reclaim-after') %}
+      <input id="f-reclaim-after" name="reclaim_after" value="{{ zone_row.reclaim_after|duration if zone_row.reclaim_after else '' }}" placeholder="{{ reclaim_default|duration }}" maxlength="20" {% if ro %}disabled{% endif %}>
+    {% endcall %}
+    {% if user.is_admin %}{% call action_bar(note='See which names are stale now on the Records tab (Stale names).') %}<button type="submit">Save</button>{% endcall %}{% endif %}
+  </form>
+</section>
+{% endif %}
+
+<form method="post" action="/zones/{{ zone_name }}/settings" class="card form-card settings spaced">
+  <h2>Declaration</h2>
+  <p class="muted small">LiteBlox declares this zone in <code>zones.conf</code> on every node serving it. The primary always notifies its secondaries and lets them transfer the zone with LiteBlox's own key; these settings add to that. Empty lists mean the node's own default.</p>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  {% call setting('Notify', 'notify', None, 'f-notify') %}
+    <select id="f-notify" name="notify" {% if ro %}disabled{% endif %}>
+      {% for v, label in [('no', "no: only LiteBlox's own secondaries"), ('explicit', "explicit: the list below (and LiteBlox's secondaries)"), ('yes', "yes: the zone's NS records and the list below"), ('', "not set (BIND: yes)")] %}
+      <option value="{{ v }}" {% if zone_row.notify == v %}selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select>
+  {% endcall %}
+  {% call setting('Also notify', 'also-notify', 'One address per line.', 'f-also_notify') %}
+    <textarea id="f-also_notify" name="also_notify" rows="2" spellcheck="false" {% if ro %}readonly{% endif %}>{{ zone_row.also_notify }}</textarea>
+  {% endcall %}
+  {% call setting('Allow transfers to', 'allow-transfer', 'Addresses, networks, <a href="/settings/acls">ACL</a> names or <code>key NAME</code>.', 'f-allow_transfer') %}
+    <textarea id="f-allow_transfer" name="allow_transfer" rows="2" spellcheck="false" {% if ro %}readonly{% endif %} placeholder="the node's default">{{ zone_row.allow_transfer }}</textarea>
+  {% endcall %}
+  {% call setting('Answer queries from', 'allow-query', 'Addresses, networks, <a href="/settings/acls">ACL</a> names or <code>key NAME</code>.', 'f-allow_query') %}
+    <textarea id="f-allow_query" name="allow_query" rows="2" spellcheck="false" {% if ro %}readonly{% endif %} placeholder="the node's default">{{ zone_row.allow_query }}</textarea>
+  {% endcall %}
+  {% if include %}<details class="declaration"><summary class="muted small">Current declaration on the primary</summary><pre class="log">{{ include }}</pre></details>{% endif %}
+  {% if user.is_admin %}<div class="card-actions"><span class="muted small">Rewrites <code>zones.conf</code> on each node serving it; each is backed up first.</span><button type="submit">Save and apply to nodes</button></div>{% endif %}
+</form>
+{% endif %}
+
+{% if user.is_admin %}
+<section class="card form-card settings spaced danger-zone" id="danger">
+  <h2>Danger zone</h2>
+  {% set removable = nodes if forwarding else nodes|rejectattr('role', 'equalto', 'primary')|list %}
+  {% if removable %}
+  {% call setting('Stop serving on a node', None, 'LiteBlox removes the declaration from that node, backing it up first.' ~ (' The zone file stays on the node. The primary serves every zone, so it isn\'t listed.' if not forwarding else ''), 'f-remove-node') %}
+    <form method="post" action="/zones/{{ zone_name }}/nodes/remove" class="inline-actions"
+          data-confirm="Stop serving {{ zone_name }} on {node_id}? Its zone file stays on the node." data-confirm-ok="Stop serving">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <select id="f-remove-node" name="node_id">{% for n in removable %}<option value="{{ n.id }}">{{ n.name }}</option>{% endfor %}</select>
+      <button type="submit" class="danger">Stop serving</button>
+    </form>
+  {% endcall %}
+  {% endif %}
+  {% call setting('Delete this zone', None, 'LiteBlox removes the declaration from every node serving it (each is backed up first, and every node must be reachable), then forgets the zone. The zone files stay on the nodes. ' ~ ("Its <code>validate-except</code> entry goes too, on the nodes that serve it." if forwarding else 'Any draft is discarded; the history is kept, so creating or importing a zone with this name again brings it back under History.'), 'f-confirm-name') %}
+    <form method="post" action="/zones/{{ zone_name }}/delete" class="inline-actions">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input id="f-confirm-name" name="confirm_name" autocomplete="off" spellcheck="false" placeholder="type {{ zone_name }} to confirm"
+        oninput="this.form.querySelector('button').disabled = this.value.trim().toLowerCase().replace(/\.$/, '') !== '{{ zone_name }}'">
+      <button type="submit" class="danger" disabled>Delete {{ zone_name }}</button>
+    </form>
+  {% endcall %}
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,19 @@
+{% extends 'base.html' %}
+{% block title %}API token · LiteBlox{% endblock %}
+{% block content %}
+<h1>API token <code>{{ t.name }}</code></h1>
+<section class="card form-card">
+  <p class="notice">This is the only time LiteBlox shows this token. Copy it now; if it's lost, revoke it and make a new one.</p>
+  <dl class="facts">
+    <dt>User</dt><dd>{{ t.username }}</dd>
+    <dt>Scope</dt><dd>{{ 'full: everything the user\'s role allows' if t.scope == 'full' else 'read only' }}</dd>
+    <dt>Expires</dt><dd>{{ t.expires_at|localtime if t.expires_at else 'never' }}</dd>
+  </dl>
+  <pre class="log">{{ r.token }}</pre>
+  <p class="muted small">Send it with every call, for example:</p>
+  <pre class="log">curl -H 'Authorization: Bearer {{ r.token }}' {{ base }}api/v1/me</pre>
+  <p class="muted small">Every endpoint is on the <a href="/api/docs">API page</a> (Authorize with the token there to try them), and how it works in <a href="/help/api">The API</a>.</p>
+  <form method="post" action="/tokens/reveal/{{ key }}/done">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button type="submit">I've saved it</button></form>
+</section>
+{% endblock %}

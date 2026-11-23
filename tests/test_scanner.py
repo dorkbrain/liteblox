@@ -1,0 +1,425 @@
+"""Nodes without BIND (4.0): scanner nodes and DHCP/Time-only nodes, from the add form to the agent."""
+
+import io
+import json
+import re
+import sqlite3
+import tarfile
+import threading
+
+import pytest
+
+from liteblox import cli, db, modules
+from liteblox.backups import service as backups
+from liteblox.bindconf import takeover
+from liteblox.ipam.free import node_on
+from liteblox.nodes import bootstrap as bootstrap_mod
+from liteblox.nodes import service
+from liteblox.nodes.client import AgentClient, AgentError
+from liteblox.pki import PKI
+
+from conftest import csrf_from
+from test_agent import agent_config, agent_mod, fake_root, pki  # noqa: F401 (fixtures)
+from test_nodes import FP, HOST_KEY, FakeRemote, fake_hostkey  # noqa: F401 (fixture)
+
+
+@pytest.fixture
+def admin(client, make_user, login):
+    login(*make_user('admin', 'admin-password', 'admin'))
+    return client
+
+
+def add_node(conn, name='scan1', host='192.0.2.60', bind=False, **cols):
+    node_id = service.add_node(conn, name, host, 22, 8530, HOST_KEY, FP, bind=bind)
+    if cols:
+        with conn:
+            conn.execute(f"UPDATE nodes SET {', '.join(f'{k} = ?' for k in cols)} WHERE id = ?",
+                         (*cols.values(), node_id))
+    return node_id
+
+
+def ready(**cols):
+    return dict(status='ready', agent_version='4.0.0', **cols)
+
+
+def add_zone(conn, node_id, name='example.com'):
+    with conn:
+        zone_id = conn.execute('INSERT INTO zones (name, repo_file) VALUES (?, ?)', (name, f'{name}.zone')).lastrowid
+        conn.execute('INSERT INTO zone_nodes (zone_id, node_id, node_file) VALUES (?, ?, ?)',
+                     (zone_id, node_id, f'/etc/bind/db.{name}'))
+
+
+def switch(conn, **wanted):
+    on = modules.enabled(conn)
+    on.update(wanted)
+    assert modules.save(conn, on) == {}
+
+
+# ── schema, helpers ────────────────────────────────────────────────────────────
+
+def test_existing_nodes_stay_bind_nodes(tmp_path):
+    path = tmp_path / 'old.db'
+    c = sqlite3.connect(path)
+    for version, step in enumerate(db.MIGRATIONS[:32], start=1):
+        c.executescript(step)
+        c.execute(f'PRAGMA user_version = {version}')
+    c.execute("INSERT INTO nodes (name, host, host_key, host_key_fp) VALUES ('ns1', '192.0.2.53', 'k', 'f')")
+    c.commit()
+    c.close()
+    db.migrate(path)
+    c = db.connect(path)
+    assert c.execute('SELECT bind FROM nodes').fetchone()[0] == 1
+    c.close()
+
+
+def test_kind_and_set_up(conn):
+    scan = service.get_node(conn, add_node(conn))
+    assert service.is_scanner(scan) and service.kind(scan) == 'scanner' and not service.set_up(scan)
+    dhcp = service.get_node(conn, add_node(conn, 'dhcp1', **ready(dhcp=1, ntp=1)))
+    assert not service.is_scanner(dhcp) and service.kind(dhcp) == 'DHCP + Time' and service.set_up(dhcp)
+    dns = service.get_node(conn, add_node(conn, 'ns1', bind=True, **ready()))
+    assert service.kind(dns) == 'DNS' and not service.set_up(dns)       # a BIND node: once taken over
+    with conn:
+        conn.execute('UPDATE nodes SET managed = 1 WHERE id = ?', (dns['id'],))
+    assert service.set_up(service.get_node(conn, dns['id']))
+
+
+def test_bind_choice_changes_only_while_nothing_needs_it(conn):
+    node_id = add_node(conn, 'ns1', bind=True)
+    assert service.set_bind(conn, node_id, False)['bind'] == 0
+    assert service.set_bind(conn, node_id, True)['bind'] == 1
+    add_zone(conn, node_id)
+    with pytest.raises(service.NodeError, match='serves 1 zone'):
+        service.set_bind(conn, node_id, False)
+    with conn:
+        conn.execute('DELETE FROM zone_nodes')
+        conn.execute('UPDATE nodes SET managed = 1')
+    with pytest.raises(service.NodeError, match="manages ns1's BIND config"):
+        service.set_bind(conn, node_id, False)
+
+
+def test_dns_module_counts_only_bind_nodes(conn):
+    add_node(conn)
+    assert modules.in_use(conn, 'dns') is None
+    switch(conn, dns=False)
+    switch(conn, dns=True)
+    add_node(conn, 'ns1', bind=True)
+    assert modules.in_use(conn, 'dns') == '1 BIND node'
+
+
+# ── bootstrap over SSH ─────────────────────────────────────────────────────────
+
+class NoBindAgent:
+    def __init__(self, *a, **k):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+    def status(self):
+        return {'bind': False, 'agent_version': '4.0.0', 'agent_sha256': 'x', 'python': '3.12.3',
+                'named_version': None, 'rndc_ok': False, 'checkconf_ok': False, 'zones_writable': {},
+                'interfaces': [{'name': 'ens18', 'up': True, 'addresses': ['192.0.2.60/24']}]}
+
+
+def _bootstrap(tmp_path, monkeypatch, options, remote=FakeRemote):
+    monkeypatch.setattr(bootstrap_mod, 'AgentClient', NoBindAgent)
+    monkeypatch.setattr(bootstrap_mod.time, 'sleep', lambda s: None)
+    node = {'name': 'scan1', 'host': '192.0.2.60', 'ssh_port': 22, 'agent_port': 8530, 'host_key': HOST_KEY,
+            'host_key_fp': FP, 'bind': 0, 'ntp_conf': '# Generated by LiteBlox\n'}
+    lines = []
+    bootstrap_mod.bootstrap(node, bootstrap_mod.Credentials('claude', password='pw'), options,
+                            PKI(tmp_path / 'pki').ensure(), tmp_path / 'backups', '4.0.0', lines.append, connect=remote)
+    return node, lines, remote.last
+
+
+def test_bootstrap_without_bind(tmp_path, monkeypatch):
+    class Remote(FakeRemote):
+        def run(self, cmd, **kw):
+            if cmd.startswith('systemctl --version'):
+                self.commands.append(cmd)
+                return 0, 'systemd 255 (255.4-1ubuntu8)'
+            if cmd.startswith('/usr/sbin/named') or 'named-checkconf' in cmd:
+                raise AssertionError(f'BIND touched: {cmd}')
+            return super().run(cmd, **kw)
+    node, lines, r = _bootstrap(tmp_path, monkeypatch, bootstrap_mod.Options(), Remote)   # the node's own choice
+    joined = '\n'.join(r.commands)
+    assert 'tar czf' not in joined and 'bind' not in joined.replace('liteblox', '')
+    assert not (tmp_path / 'backups').exists() and 'prebootstrap_backup' not in node
+    assert 'systemctl restart liteblox-agent' in joined
+    up = r.uploaded
+    unit = up['liteblox-agent.service'].decode()
+    directives = '\n'.join(line for line in unit.splitlines() if not line.startswith('#'))
+    assert not re.search(r'^(SupplementaryGroups|ReadWritePaths)=', unit, re.M) and '/etc/bind' not in directives
+    assert re.search(r'^After=network-online.target$', unit, re.M)
+    assert json.loads(up['config.json'])['bind'] is False
+    assert 'No BIND on this node' in '\n'.join(lines) and '(no BIND)' in '\n'.join(lines)
+    assert 'ens18 up: 192.0.2.60/24' in '\n'.join(lines)
+
+
+def test_bootstrap_without_bind_with_kea_and_chrony(tmp_path, monkeypatch):
+    class Remote(FakeRemote):
+        def run(self, cmd, **kw):
+            if cmd.startswith('systemctl --version'):
+                return 0, 'systemd 257'
+            if cmd.startswith('systemctl is-active chrony'):
+                return 0, 'active'
+            return super().run(cmd, **kw)
+    node, _, r = _bootstrap(tmp_path, monkeypatch, bootstrap_mod.Options(bind=False, dhcp=True, ntp=True), Remote)
+    unit = r.uploads[-1]['liteblox-agent.service'].decode()
+    assert re.search(r'^SupplementaryGroups=_kea$', unit, re.M)
+    assert re.search(r'^ReadWritePaths=/etc/kea /etc/chrony$', unit, re.M)
+    assert node['dhcp_setup']['dhcp'] == 1 and node['ntp_setup']['ntp'] == 1
+
+
+def test_bootstrap_without_bind_needs_systemd(tmp_path, monkeypatch):
+    class Remote(FakeRemote):
+        def run(self, cmd, **kw):
+            if cmd.startswith('systemctl --version'):
+                return 127, 'not found'
+            return super().run(cmd, **kw)
+    with pytest.raises(bootstrap_mod.BootstrapError, match='systemd'):
+        _bootstrap(tmp_path, monkeypatch, bootstrap_mod.Options(bind=False), Remote)
+
+
+def test_unit_text_for_each_kind():
+    assert re.search(r'^SupplementaryGroups=bind$', bootstrap_mod.unit_text(set()), re.M)
+    assert re.search(r'^SupplementaryGroups=bind _kea$', bootstrap_mod.unit_text(set(), kea=True), re.M)
+    bare = bootstrap_mod.unit_text(set(), bind=False)
+    assert not re.search(r'^(SupplementaryGroups|ReadWritePaths)=|named', bare, re.M)
+    assert 'ExecStart=/usr/bin/python3 -I /usr/local/lib/liteblox-agent/liteblox_agent.py' in bare
+
+
+def test_start_bootstrap_records_the_choice_and_skips_takeover(conn, settings, monkeypatch):
+    from liteblox.nodes import service as nodes
+    node_id = add_node(conn, 'ns1', bind=True)
+    seen = {}
+
+    def fake_bootstrap(node, creds, options, *a, **k):
+        seen['bind'] = node['bind']
+        node.update(cert_fingerprint='fp', cert_not_after='2030-01-01')
+        return NoBindAgent().status()
+    monkeypatch.setattr(nodes, 'bootstrap', fake_bootstrap)
+    monkeypatch.setattr(takeover, 'takeover', lambda *a, **k: pytest.fail('took over a node without BIND'))
+    job = nodes.start_bootstrap(settings, node_id, None, bootstrap_mod.Options(bind=False), 'admin', background=False)
+    assert seen['bind'] == 0 and service.get_node(conn, node_id)['bind'] == 0
+    log = conn.execute('SELECT status, log FROM jobs WHERE id = ?', (job,)).fetchone()
+    assert log['status'] == 'ok' and 'No longer runs DNS' in log['log'] and 'A scanner node' in log['log']
+
+    # a node serving zones keeps BIND: the job fails before touching it
+    with conn:
+        conn.execute('UPDATE nodes SET bind = 1 WHERE id = ?', (node_id,))
+    add_zone(conn, node_id)
+    job = nodes.start_bootstrap(settings, node_id, None, bootstrap_mod.Options(bind=False), 'admin', background=False)
+    row = conn.execute('SELECT status, log FROM jobs WHERE id = ?', (job,)).fetchone()
+    assert row['status'] == 'failed' and 'stays a BIND node' in row['log']
+
+
+# ── the agent with "bind": false ───────────────────────────────────────────────
+
+@pytest.fixture
+def scanner_client(agent_config, pki, tmp_path):
+    kea = tmp_path / 'kea'
+    kea.mkdir()
+    (kea / 'kea-dhcp4.conf').write_text('{}')
+    gone = str(tmp_path / 'no-such-tool')
+    cfg = dict(agent_config, bind=False, backup_paths=[str(kea), str(tmp_path / 'missing')],
+               tools=dict(agent_config['tools'], named=gone, named_checkconf=gone, rndc=gone))
+    srv = agent_mod.make_server(cfg)
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    with AgentClient('127.0.0.1', pki, port=srv.server_address[1]) as c:
+        yield c, kea
+    srv.shutdown()
+    srv.server_close()
+
+
+def test_agent_status_without_bind(scanner_client):
+    c, _ = scanner_client
+    s = c.status()
+    assert s['bind'] is False and s['named_version'] is None and s['zones_writable'] == {}
+    assert s['taken_over'] is False and s['config_files'] == {} and 'clock' in s and 'interfaces' in s
+    assert list(s)[-1] == 'clock'           # read last: LiteBlox measures the skew against the answer's arrival
+
+
+@pytest.mark.parametrize('call', [lambda c: c.config(), lambda c: c.get_zone('example.com'),
+                                  lambda c: c.check_config({}), lambda c: c.rollback_config()])
+def test_agent_bind_endpoints_answer_404(scanner_client, call):
+    with pytest.raises(AgentError) as e:
+        call(scanner_client[0])
+    assert e.value.status == 404 and 'runs no BIND' in e.value.message
+
+
+def test_agent_backup_and_stats_without_bind(scanner_client):
+    c, kea = scanner_client
+    data, _ = c.backup()
+    tar = tarfile.open(fileobj=io.BytesIO(data), mode='r:gz')
+    names = tar.getnames()
+    manifest = json.load(tar.extractfile(f'{agent_mod.BACKUP_META}/manifest.json'))
+    assert str(kea / 'kea-dhcp4.conf').lstrip('/') in names
+    assert f'{agent_mod.BACKUP_META}/named-checkconf.txt' not in names and manifest['named_version'] is None
+    stats = c.stats()
+    assert stats['bind'] is None and 'bind' not in stats['errors']
+
+
+def test_agent_stays_python_39():
+    import ast
+    from liteblox.nodes import agent_dir
+    ast.parse((agent_dir() / 'liteblox_agent.py').read_text(), feature_version=(3, 9))
+
+
+# ── pages ──────────────────────────────────────────────────────────────────────
+
+def _confirm(admin, **extra):
+    t = csrf_from(admin.get('/nodes/new').text)
+    return admin.post('/nodes/confirm', data={'name': 'scan1', 'host': '192.0.2.60', 'ssh_port': 22, 'agent_port': 8530,
+                                               'fingerprint': FP, 'csrf_token': t, **extra}, follow_redirects=False)
+
+
+def test_add_form_asks_runs_dns(admin, conn, fake_hostkey):
+    page = admin.get('/nodes/new').text
+    assert 'Runs DNS (BIND)' in page and re.search(r'name="bind" value="1"[^>]*checked', page)
+    t = csrf_from(page)
+    r = admin.post('/nodes/new', data={'name': 'scan1', 'host': '192.0.2.60', 'services': '1', 'csrf_token': t})
+    assert '<input type="hidden" name="bind" value="0">' in r.text      # unticked, carried to the confirm step
+    assert _confirm(admin, services='1').status_code == 303             # box unticked
+    assert service.get_node(conn, 'scan1')['bind'] == 0
+    assert 'no BIND' in conn.execute("SELECT detail FROM audit WHERE action = 'node_add'").fetchone()[0]
+
+
+def test_add_form_without_the_box_keeps_a_bind_node(admin, conn, fake_hostkey):
+    assert _confirm(admin).status_code == 303                           # scripts posting the old form
+    assert service.get_node(conn, 'scan1')['bind'] == 1
+
+
+def test_add_form_with_dns_off(admin, conn, fake_hostkey):
+    switch(conn, dns=False)
+    page = admin.get('/nodes/new').text
+    assert 'Runs DNS (BIND)' not in page and 'The DNS module is off' in page
+    assert _confirm(admin, services='1', bind='1').status_code == 303    # can't add BIND with DNS off
+    assert service.get_node(conn, 'scan1')['bind'] == 0
+
+
+def test_scanner_page_and_list(admin, conn):
+    node_id = add_node(conn, **ready())
+    page = admin.get(f'/nodes/{node_id}').text
+    assert '<span class="pill">scanner</span>' in page and 'a <strong>scanner</strong>' in page
+    for gone in ('DNS address', 'Take over', 'Server settings', 'Zones on this node', 'BIND config'):
+        assert gone not in page
+    listing = admin.get('/nodes').text
+    assert '<span class="pill">scanner</span>' in listing and 'Primary and secondaries' not in listing
+    for path in ('takeover', 'settings', 'zones', 'drift'):
+        assert admin.get(f'/nodes/{node_id}/{path}').status_code == 404
+
+
+def test_bootstrap_form_and_route(admin, conn, monkeypatch):
+    node_id = add_node(conn, 'ns1', bind=True)
+    captured = {}
+    monkeypatch.setattr(service, 'start_bootstrap',
+                        lambda settings, nid, creds, options, *a, **k: captured.setdefault('options', options) and 1)
+    page = admin.get(f'/nodes/{node_id}/bootstrap').text
+    assert 'name="services"' in page and 'Runs DNS (BIND)' in page
+    t = csrf_from(page)
+    form = {'ssh_user': 'u', 'ssh_password': 'p', 'csrf_token': t}
+    admin.post(f'/nodes/{node_id}/bootstrap', data=dict(form, services='1'), follow_redirects=False)
+    assert captured.pop('options').bind is False
+    admin.post(f'/nodes/{node_id}/bootstrap', data=dict(form, services='1', bind='1'), follow_redirects=False)
+    assert captured.pop('options').bind is True
+    admin.post(f'/nodes/{node_id}/bootstrap', data=form, follow_redirects=False)
+    assert captured.pop('options').bind is None                         # no box: the node keeps its choice
+
+    add_zone(conn, node_id)                                             # serving zones: the box goes away
+    page = admin.get(f'/nodes/{node_id}/bootstrap').text
+    assert 'name="services"' not in page
+    admin.post(f'/nodes/{node_id}/bootstrap', data=dict(form, services='1'), follow_redirects=False)
+    assert captured.pop('options').bind is None
+
+    scan = add_node(conn, **ready())
+    page = admin.get(f'/nodes/{scan}/bootstrap').text
+    assert 'name="install_bind"' in page and 'x-show="dns"' in page     # hidden until Runs DNS is ticked
+    with conn:
+        conn.execute('DELETE FROM nodes WHERE id = ?', (node_id,))
+        conn.execute('DELETE FROM zones')
+    switch(conn, dns=False)
+    page = admin.get(f'/nodes/{scan}/bootstrap').text
+    assert 'name="services"' not in page and 'No BIND:' in page and 'scanner' in page
+
+
+# ── the rest of LiteBlox leaves them out of DNS ────────────────────────────────
+
+def test_backups_skip_scanners(conn, settings):
+    scan = add_node(conn, **ready())
+    dhcp = add_node(conn, 'dhcp1', **ready(dhcp=1))
+    assert [n['name'] for n in backups.ready_nodes(conn)] == ['dhcp1']
+    assert not backups.is_stale(conn, settings, scan) and backups.is_stale(conn, settings, dhcp)
+
+
+def test_zone_targets_and_takeover_leave_them_out(conn, settings):
+    from liteblox.dns.routes import _zone_targets
+    scan = add_node(conn, **ready(managed=1))           # can't really happen; even so
+    assert _zone_targets(conn) == []
+    with pytest.raises(takeover.TakeoverError, match="doesn't run BIND"):
+        takeover.preview(conn, settings, service.get_node(conn, scan))
+
+
+def test_ipam_prefers_a_scanner_on_the_network(conn):
+    import ipaddress
+    nets = json.dumps(['192.0.2.0/24'])
+    add_node(conn, 'ns1', host='192.0.2.53', bind=True, networks=nets, **ready())
+    add_node(conn, 'scan1', host='192.0.2.60', networks=nets, **ready())
+    assert node_on(conn, ipaddress.ip_address('192.0.2.99'))['name'] == 'scan1'
+
+
+def test_api_lists_bind(admin, conn):
+    from liteblox.api import tokens
+    add_node(conn, **ready())
+    secret = tokens.create(conn, 'admin', 'test', 'read', 'admin')[1]
+    r = admin.get('/api/v1/nodes', headers={'Authorization': f'Bearer {secret}'})
+    assert r.json()[0]['bind'] is False
+
+
+def test_cli_add_and_bootstrap_flags(conn, settings, fake_hostkey, monkeypatch, capsys):
+    monkeypatch.setenv('LITEBLOX_DATA', str(settings.data_dir))
+    monkeypatch.setenv('LITEBLOX_BACKUPS', str(settings.backups_dir))
+    assert cli.main(['node', 'add', 'scan1', '192.0.2.60', '--yes', '--no-bind']) in (0, None)
+    assert service.get_node(conn, 'scan1')['bind'] == 0 and 'no BIND' in capsys.readouterr().out
+    node_id = add_node(conn, 'ns1', bind=True)
+    add_zone(conn, node_id)
+    assert cli.main(['node', 'bootstrap', 'ns1', '--ssh-user', 'u', '--use-ssh-keys', '--no-bind']) == 1
+    assert 'serves 1 zone' in capsys.readouterr().out
+    cli.main(['node', 'list'])
+    assert re.search(r'scan1 .* scanner', capsys.readouterr().out)
+
+
+@pytest.mark.parametrize('current, gid, wanted', [
+    ('0\t2147483647', 990, None),           # systemd's default (Debian): every group already
+    ('1\t0', 990, '990 990'),               # Ubuntu: nobody
+    ('100 200', 990, '100 990'),            # a range of its own: only widened
+    ('1000 2000', 990, '990 2000'),
+])
+def test_ping_range(current, gid, wanted):
+    assert bootstrap_mod.ping_range(current, gid) == wanted
+
+
+def test_bootstrap_lets_the_agent_ping_on_ubuntu(tmp_path, monkeypatch):
+    class Ubuntu(FakeRemote):
+        def run(self, cmd, **kw):
+            if cmd.startswith('systemctl --version'):
+                return 0, 'systemd 255'
+            if cmd == 'cat /proc/sys/net/ipv4/ping_group_range':
+                return 0, '1\t0'
+            if cmd == 'id -g liteblox-agent':
+                return 0, '990'
+            return super().run(cmd, **kw)
+    _, lines, r = _bootstrap(tmp_path, monkeypatch, bootstrap_mod.Options(bind=False), Ubuntu)
+    cmd = next(c for c in r.commands if 'ping_group_range =' in c)
+    assert cmd.startswith('sudo ') and "'net.ipv4.ping_group_range = 990 990' > /etc/sysctl.d/60-liteblox-agent-ping.conf" in cmd
+    assert "sysctl -q -w net.ipv4.ping_group_range='990 990'" in cmd
+    assert 'now 990 990 so the agent can ping' in '\n'.join(lines)
+    # Debian's default: nothing written
+    _, _, r = _bootstrap(tmp_path, monkeypatch, bootstrap_mod.Options(bind=False),
+                         type('Debian', (Ubuntu,), {'run': lambda self, cmd, **kw: (0, '0\t2147483647') if cmd.startswith('cat /proc/sys/net/ipv4/ping') else Ubuntu.run(self, cmd, **kw)}))
+    assert not any('ping_group_range =' in c for c in r.commands)

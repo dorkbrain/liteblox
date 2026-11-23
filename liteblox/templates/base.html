@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- htmx 2 doesn't swap 4xx responses by default; the grid sends its row errors (422) and conflicts (409) that way -->
+  <meta name="htmx-config" content='{"responseHandling": [{"code": "204", "swap": false}, {"code": "[23]..", "swap": true}, {"code": "409", "swap": true, "error": false}, {"code": "422", "swap": true, "error": false}, {"code": "[45]..", "swap": false, "error": true}, {"code": "...", "swap": false}]}'>
+  <title>{% block title %}LiteBlox{% endblock %}</title>
+  {% if has_asset('favicon.svg') %}<link rel="icon" type="image/svg+xml" href="{{ asset('favicon.svg') }}">{% endif %}
+  <link rel="stylesheet" href="{{ asset('app.css') }}">
+  <script src="{{ asset('topbar.js') }}"></script>{# not deferred: the saved theme applies before the first paint #}
+  <script src="{{ asset('vendor/htmx.min.js') }}" defer></script>
+  <script src="{{ asset('vendor/alpine.min.js') }}" defer></script>
+  <script src="{{ asset('app.js') }}" defer></script>
+  {% block head %}{% endblock %}
+</head>
+<body hx-headers='{"X-CSRF-Token": "{{ csrf_token(request) }}"}'>
+  {% if user %}
+  {% include 'partials/topbar.html' %}
+  {% endif %}
+  <main class="{% block main_class %}{% endblock %}">
+    {% block content %}{% endblock %}
+  </main>
+  <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-text">
+    <form method="dialog">
+      <p class="confirm-text" id="confirm-text"></p>
+      <div class="inline-actions">
+        <button type="submit" value="ok" class="danger">OK</button>
+        <button type="submit" value="cancel" class="secondary" autofocus>Cancel</button>
+      </div>
+    </form>
+  </dialog>
+  <footer>LiteBlox {{ version }}</footer>
+</body>
+</html>

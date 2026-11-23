@@ -1,0 +1,24 @@
+# local-only working notes, Claude context, progress tracking
+WIP/
+CLAUDE.local.md
+
+# release pipeline output
+dist/
+
+# local test environment state
+testenv/data/
+testenv/backups/
+
+# real zone files used by round-trip tests (internal DNS data)
+tests/fixtures/private/
+
+# python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# local Claude Code launch/settings
+.claude/

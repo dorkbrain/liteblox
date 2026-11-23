@@ -1,0 +1,37 @@
+{#- IPAM's maps. The cells keep one size: the address map is one /24 (the table's page), the block strip one cell
+    per /24 of a bigger network, and a container's map one cell per block of it. -#}
+
+{#- One page of addresses: 32 × 8 (16 × 16 on a phone), coloured by state, a range's addresses banded. A click
+    jumps to the address's row. -#}
+{% macro address_map(cells, highlight=None) -%}
+<div class="ipam-map" role="list" aria-label="Addresses">
+  {%- for c in cells %}<a role="listitem" href="#ip-{{ c.ip }}" class="cell s-{{ c.state }}{% if c.band is not none %} band band-{{ c.band % 4 }}{% endif %}{% if c.checks %} flag{% endif %}{% if highlight and c.ip == highlight %} hl{% endif %}" title="{{ c.title }}" data-ip="{{ c.ip }}"></a>{% endfor -%}
+</div>
+{%- endmacro %}
+
+{#- A leaf bigger than a /24: one cell per /24, shaded by how full it is; the current page's cell is marked. -#}
+{% macro block_strip(blocks, page, base) -%}
+<div class="ipam-strip" aria-label="Blocks of 256 addresses">
+  {%- for b in blocks %}<a href="{{ base }}?page={{ b.page }}" class="cell l-{{ b.level }}{% if b.page == page %} on{% endif %}" title="{{ b.first }}/24: {{ b.used }} of {{ b.size }} in use"{% if b.page == page %} aria-current="page"{% endif %}></a>{% endfor -%}
+</div>
+{%- endmacro %}
+
+{#- A container: its blocks, shaded by how much of each its networks cover, each linking to the network there. -#}
+{% macro container_map(cells) -%}
+<div class="ipam-map{{ ' few' if cells|length < 256 }}" role="list" aria-label="Blocks">
+  {%- for c in cells %}{% if c.child %}<a role="listitem" href="/ipam/networks/{{ c.child.id }}" class="cell l-{{ c.level }}" title="{{ c.title }}"></a>{% else %}<span role="listitem" class="cell l-0" title="{{ c.title }}"></span>{% endif %}{% endfor -%}
+</div>
+{%- endmacro %}
+
+{#- The Utilization donut: server-drawn SVG segments (view.svg_donut) and a legend with the counts. -#}
+{% macro donut(segments, legend, total_label) -%}
+<div class="ipam-donut">
+  <svg viewBox="0 0 100 100" width="120" height="120" role="img" aria-label="{{ total_label }}">
+    <circle cx="50" cy="50" r="40" fill="none" class="d-free" stroke-width="14"></circle>
+    {%- for state, n, dash, offset in segments %}
+    <circle cx="50" cy="50" r="40" fill="none" class="d-{{ state }}" stroke-width="14" stroke-dasharray="{{ dash }}" stroke-dashoffset="{{ offset }}" transform="rotate(-90 50 50)"><title>{{ n }}</title></circle>
+    {%- endfor %}
+  </svg>
+  <ul class="plain small">{% for key, label, n in legend if key != 'named' or n %}<li><i class="d-{{ key }}"></i>{{ label }}<b>{{ n }}</b></li>{% endfor %}</ul>
+</div>
+{%- endmacro %}

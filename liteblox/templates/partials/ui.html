@@ -1,0 +1,33 @@
+{#- Pieces every page shares, so forms, headings and empty states look the same everywhere. -#}
+
+{#- The end of a form: Cancel (a link back) just before the one primary button, which the caller supplies.
+    sticky keeps it in view at the bottom of long settings forms; note (text) or lead (markup) goes on the left. -#}
+{% macro action_bar(cancel=None, sticky=False, note=None, lead=None) -%}
+<div class="{{ 'action-bar' if sticky else 'form-actions' }}">
+  {%- if note %}<span class="muted small">{{ note }}</span>{% endif %}{{ lead or '' }}
+  <div class="inline-actions">
+    {%- if cancel %}<a class="button secondary" href="{{ cancel }}">Cancel</a>{% endif %}
+    {{ caller() if caller }}
+  </div>
+</div>
+{%- endmacro %}
+
+{#- "Nodes · ns1 · Server settings": each (href, label) pair links back up; the last part is the page. -#}
+{% macro breadcrumb(trail, current) -%}
+<h1>{% for href, label in trail %}<a href="{{ href }}">{{ label }}</a> · {% endfor %}{{ current }}{{ caller() if caller }}</h1>
+{%- endmacro %}
+
+{#- Nothing to list yet: one sentence and, for admins, the button that adds the first one. -#}
+{% macro empty(text, href=None, label=None) -%}
+<div class="empty"><p class="muted">{{ text }}</p>{% if href %}<a class="button" href="{{ href }}">{{ label }}</a>{% endif %}</div>
+{%- endmacro %}
+
+{#- A row of filter links over a list: All, then each (key, label, count); base?param=key, current marked. -#}
+{% macro filters(base, param, items, current, total) -%}
+<nav class="filters" aria-label="Filter">
+  <a href="{{ base }}"{% if not current %} aria-current="page"{% endif %}>All <span class="count">{{ total }}</span></a>
+  {%- for key, label, count in items if count or key == current %}
+  <a href="{{ base }}?{{ param }}={{ key }}"{% if key == current %} aria-current="page"{% endif %}>{{ label }} <span class="count">{{ count }}</span></a>
+  {%- endfor %}
+</nav>
+{%- endmacro %}

@@ -1,0 +1,24 @@
+{% from 'partials/diff.html' import diff %}
+<section class="card form-card spaced review">
+  <h2>Review</h2>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>
+  {% else %}
+  {% for n, pv in results %}
+  <h3>{{ n.name }}{% if n.role %} <span class="pill">{{ n.role }}</span>{% endif %}</h3>
+  {% for p in pv.problems %}<p class="error">{{ p }}</p>{% endfor %}
+  {% for level, msg in pv.findings %}<p class="{{ 'error' if level == 'block' else 'notice' }}">{{ msg }}</p>{% endfor %}
+  {% if pv.diff %}{{ diff(pv.diff) }}
+    {% if not pv.problems %}<p class="muted small">✓ {{ n.name }}'s named-checkconf accepts it.</p>{% endif %}
+  {% elif not pv.problems %}<p class="muted small">No change on {{ n.name }}.</p>{% endif %}
+  {% endfor %}
+  {% if problems %}
+  <p class="muted">Fix the problems above, then review again.</p>
+  {% elif changed %}
+  <p class="muted small">Nodes are changed one at a time{% if results|length > 1 %}, the primary last{% endif %}. After each one LiteBlox checks that its zones still answer (and recursion still works, if it did). If anything broke, every node this change touched is rolled back.</p>
+  {% if blocks %}<label class="check"><input type="checkbox" name="apply_anyway" value="1"><span>Apply anyway: I know LiteBlox thinks this locks it out. <span class="muted small">The checks still roll it back if a node stops answering.</span></span></label>{% endif %}
+  <div class="inline-actions"><button type="submit">Apply to {{ results|map(attribute='0.name')|join(' and ') }}</button></div>
+  {% else %}
+  <p class="muted">Nothing to apply.</p>
+  {% endif %}
+  {% endif %}
+</section>

@@ -1,0 +1,41 @@
+{% extends 'base.html' %}
+{% block title %}Audit log · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="heading"><h1><a href="/users">Users</a> · Audit log</h1></div>
+<section class="card">
+  <form method="get" action="/audit" class="inline-actions audit-filters">
+    <select name="who" aria-label="User">
+      <option value="">everyone</option>
+      {% for w in who_choices %}<option{% if w == filters.who %} selected{% endif %}>{{ w }}</option>{% endfor %}
+    </select>
+    <select name="action" aria-label="Action">
+      <option value="">every action</option>
+      {% for code, text in actions %}<option value="{{ code }}"{% if code == filters.action %} selected{% endif %}>{{ text }}</option>{% endfor %}
+    </select>
+    <input type="search" name="q" value="{{ filters.q }}" placeholder="zone, node or other detail" aria-label="Detail contains">
+    <label class="check small"><input type="checkbox" name="logins" value="1"{% if filters.logins %} checked{% endif %}> sign-ins</label>
+    <button type="submit" class="secondary">Filter</button>
+    {% if filters.who or filters.action or filters.q or filters.logins %}<a class="small" href="/audit">Clear</a>{% endif %}
+  </form>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>When</th><th>User</th><th>Action</th><th>Detail</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr{% if r.action == 'login_failed' %} class="warn-row"{% endif %}>
+      <td class="small nowrap">{{ r.at|localtime }}</td>
+      <td>{{ r.username or '–' }}</td>
+      <td>{{ r.action|action_label }} <code class="muted small nowrap">{{ r.action }}</code></td>
+      <td class="small">{{ r.detail or '' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">Nothing recorded{% if filters.who or filters.action or filters.q %} that matches{% endif %}.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if more %}<p><a class="button secondary" href="/audit?who={{ filters.who|urlencode }}&action={{ filters.action|urlencode }}&q={{ filters.q|urlencode }}{% if filters.logins %}&logins=1{% endif %}&before={{ rows[-1].id }}">Older</a></p>{% endif %}
+  <p class="muted small">Sign-ins are hidden unless you tick <em>sign-ins</em> or pick a login action. "User" for a failed login is the name that was typed; command-line actions show as <code>cli</code>.</p>
+</section>
+{% endblock %}

@@ -1,0 +1,9 @@
+{% set warned = job.status == 'ok' and '⚠' in (job.log or '') %}
+<p><span class="pill {{ job.status }}">{{ job.status }}</span>{% if warned %} <span class="pill warn">with warnings</span>{% endif %} <span class="muted small">started {{ job.created_at|localtime }}{% if job.username %} by {{ job.username }}{% endif %}{% if job.finished_at %} · finished {{ job.finished_at|localtime }}{% endif %}</span></p>
+<pre class="log">{% for line in (job.log or 'Starting…').splitlines() %}{% if '⚠' in line %}<span class="log-warn">{{ line }}</span>{% else %}{{ line }}{% endif %}
+{% endfor %}</pre>
+{% if job.status != 'running' %}
+{% if node %}<p><a class="button secondary" href="/nodes/{{ node.id }}">Back to {{ node.name }}</a></p>{% endif %}
+{% if job.kind == 'delete zone' %}<p><a class="button secondary" href="/zones">Zones</a></p>
+{% elif zone %}<p><a class="button{{ ' secondary' if job.kind != 'create zone' }}" href="/zones/{{ zone }}{% if job.kind == 'publish' %}/review{% endif %}">{% if job.kind == 'create zone' %}Open {{ zone }}{% else %}Back to {{ zone }}{% endif %}</a></p>{% endif %}
+{% endif %}

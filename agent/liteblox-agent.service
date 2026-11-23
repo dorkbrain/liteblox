@@ -1,0 +1,49 @@
+# Installed by the LiteBlox bootstrap wizard. Bootstrap adds the directories of
+# any primary zone files outside /etc/bind and /var/lib/bind to ReadWritePaths.
+[Unit]
+Description=LiteBlox agent (BIND, Kea, chrony and IPAM over mutual TLS)
+After=network-online.target named.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=liteblox-agent
+Group=liteblox-agent
+SupplementaryGroups=bind
+# + runs this one step as root, outside the sandbox below: it puts a new agent LiteBlox staged in place (or
+# rolls back one that didn't start); the agent itself stays unprivileged
+ExecStartPre=+/usr/bin/python3 -I /usr/local/lib/liteblox-agent/liteblox_agent_install.py
+ExecStart=/usr/bin/python3 -I /usr/local/lib/liteblox-agent/liteblox_agent.py --config /etc/liteblox-agent/config.json
+Restart=on-failure
+RestartSec=5
+
+StateDirectory=liteblox-agent
+StateDirectoryMode=0750
+UMask=0027
+# /etc/bind: generated config and static zones; /var/lib/bind: dynamic and secondary zones
+ReadWritePaths=/etc/bind /var/lib/bind
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+# AF_NETLINK: `ip -j addr` lists the interfaces Kea may serve (read only)
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

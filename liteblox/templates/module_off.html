@@ -1,0 +1,10 @@
+{% extends 'base.html' %}
+{% block title %}{{ name }} is off · LiteBlox{% endblock %}
+{% block content %}
+<div class="heading"><h1>{{ name }} is switched off</h1></div>
+<section class="card form-card">
+  <p>This LiteBlox doesn't run the {{ name }} module, so this page isn't here.
+  {% if user and user.is_admin %}Switch it on under <a href="/settings/modules">Settings → Modules</a>.{% else %}An admin can switch it on under Settings → Modules.{% endif %}</p>
+  <p class="muted small"><a href="/help/modules">What each module does</a></p>
+</section>
+{% endblock %}

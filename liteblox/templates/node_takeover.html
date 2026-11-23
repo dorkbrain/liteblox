@@ -1,0 +1,12 @@
+{% extends 'base.html' %}
+{% block title %}Take over {{ node.name }} · LiteBlox{% endblock %}
+{% block content %}
+<h1>Take over {{ node.name }}</h1>
+<section class="card">
+  <p>LiteBlox imports this node's BIND config into its own settings, then writes the whole config itself from then on: <code>/etc/bind/named.conf</code> and the files in <code>/etc/bind/liteblox/</code>. It goes ahead only when <code>named-checkconf -px</code> of the generated config matches the node's own. The node is backed up first, its own config files move to <code>/etc/bind/pre-liteblox/</code>, and zone files are copied into <code>/etc/bind/liteblox/</code>. If a zone stops serving the same serial afterwards, the old config comes back automatically.</p>
+</section>
+<section class="card spaced" hx-get="/nodes/{{ node.id }}/takeover/preview" hx-trigger="load" hx-swap="innerHTML">
+  <h2>Preview</h2>
+  <p class="muted">Reading the node's config and checking the generated one on the node…</p>
+</section>
+{% endblock %}

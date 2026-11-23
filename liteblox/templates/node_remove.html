@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+{% from 'partials/ui.html' import action_bar %}
+{% block title %}Remove {{ node.name }} · LiteBlox{% endblock %}
+{% block content %}
+<h1>Remove {{ node.name }}</h1>
+<section class="card form-card">
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <p>LiteBlox forgets <strong>{{ node.name }}</strong> ({{ node.host }}): its zones, publish results and backup list. <strong>Nothing on the server changes</strong>: BIND keeps serving what it has, and the agent keeps running until you <a href="/help/troubleshooting#removing-a-node">uninstall it</a>.</p>
+  {% if zones %}
+  <p>It serves:</p>
+  <ul class="plain">{% for z in zones %}<li><code>{{ z.name }}</code>
+    {% if not z.others %}<span class="error-text small">no other node serves it; it can't be published until a node is added again</span>{% endif %}</li>{% endfor %}</ul>
+  {% if node.managed %}
+  <p class="notice">The zones stay declared on the server. If it's reachable and should stop serving them, first use <strong>Stop serving</strong> in each zone's <strong>Settings → Danger zone</strong>.</p>
+  {% endif %}
+  {% endif %}
+  <p class="muted">Its backup files stay in the backups folder. Replacing a dead server under the same name? Don't remove it: <a href="/nodes/{{ node.id }}/edit">re-pin its host key</a> and run Repair instead, so its backups stay listed.</p>
+  <form method="post" action="/nodes/{{ node.id }}/remove">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    {% call action_bar('/nodes/' ~ node.id) %}<button type="submit" class="danger">Remove {{ node.name }} from LiteBlox</button>{% endcall %}
+  </form>
+</section>
+{% endblock %}

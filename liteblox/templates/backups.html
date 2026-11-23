@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+{% from 'partials/ui.html' import empty, filters %}
+{% block title %}{{ node.name }} backups · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="heading">
+  <h1><a href="/nodes/{{ node.id }}">{{ node.name }}</a> · Backups</h1>
+  {% if user.is_admin %}
+  <form method="post" action="/nodes/{{ node.id }}/backups">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <button type="submit">Back up now</button>
+  </form>
+  {% endif %}
+</div>
+{% if stale %}<p class="error">No successful backup of {{ node.name }} in the last 48 hours.</p>{% endif %}
+<p class="muted small">
+  {% if settings.backup_at %}Daily at {{ settings.backup_at }} (skipped when nothing changed).{% else %}Scheduled backups are off.{% endif %}
+  Keeps everything from the last 24 hours, then {{ settings.keep_daily }} daily and {{ settings.keep_weekly }} weekly backups, plus 90 days of pre-change snapshots.
+  Restore on a node with <code>tar zxf FILE -C /</code>.
+</p>
+{% if total %}{{ filters('/nodes/' ~ node.id ~ '/backups', 'kind', kind_filters, kind, total) }}{% endif %}
+{% if backups %}
+<div class="card table-wrap">
+<table>
+  <thead><tr><th>Created</th><th>Kind</th><th>Status</th><th>Files</th><th>Size</th><th>Changes</th><th></th></tr></thead>
+  <tbody>
+  {% for b in backups %}
+  <tr>
+    <td><a href="/backups/{{ b.id }}">{{ b.created_at|localtime }}</a>{% if b.checked_at %}<div class="muted small">unchanged at {{ b.checked_at|localtime }}</div>{% endif %}</td>
+    <td>{{ b.kind }}</td>
+    <td><span class="pill {{ b.status }}">{{ b.status }}</span>{% if b.error %}<div class="error-text small">{{ b.error }}</div>{% endif %}</td>
+    <td>{{ b.file_count or '–' }}{% if b.keys_included == 0 %} <span class="muted small">no keys</span>{% endif %}</td>
+    <td class="small">{% if b.size %}{{ '%.1f'|format(b.size / 1024) }} KB{% else %}–{% endif %}</td>
+    <td class="small">{% if b.id in changes %}{{ changes[b.id] }} file{{ '' if changes[b.id] == 1 else 's' }}{% else %}–{% endif %}</td>
+    <td>{% if user.is_admin and b.file %}<a href="/backups/{{ b.id }}/download">Download</a>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% elif total %}
+<section class="card">{{ empty('No backups of this kind.', '/nodes/' ~ node.id ~ '/backups', 'Show all backups') }}</section>
+{% else %}
+<section class="card">{{ empty('No backups yet. Each change to the node backs it up first, or use Back up now.') }}</section>
+{% endif %}
+{% if user.is_admin %}
+<section class="card spaced form-card">
+  <h2>Settings</h2>
+  <form method="post" action="/nodes/{{ node.id }}/backups/settings" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <label class="check"><input type="checkbox" name="include_keys" value="true" {% if node.backup_keys %}checked{% endif %}>
+      <span>Include key files (<code>*.key</code>, <code>rndc.conf</code>, <code>bind.keys</code>, LiteBlox's <code>keys.conf</code>). A restore needs them; leave them out only if the backups folder isn't private.</span></label>
+    <div><button type="submit" class="secondary">Save</button></div>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,38 @@
+{% extends 'ipam_base.html' %}
+{% from 'partials/ui.html' import action_bar %}
+{% block title %}{{ ip }} · IPAM · LiteBlox{% endblock %}
+{% block ipam %}
+<h1><a href="/ipam">IPAM</a>{% if network %} · <a href="/ipam/networks/{{ network.id }}?ip={{ ip }}">{{ network.label }}</a>{% endif %} · <code>{{ ip }}</code></h1>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+<p class="page-intro muted">{% if record %}This address's name is kept in IPAM only.{% else %}Give this address a name kept in IPAM only.{% endif %}
+  It shows as <span class="pill s-named">Named</span> on its network and search finds it; nothing goes to DNS or DHCP.
+  {%- if dns_on and not nameable %} A zone in LiteBlox covers this address: an A record there is usually the better home for its name.{% endif %}
+  <a href="/help/ipam#ipam-records">More in Help</a>.</p>
+<form method="post" action="/ipam/names/{{ ip }}" class="settings card form-card">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="back" value="{{ back }}">
+  <div class="setting">
+    <label class="setting-name" for="name">Name</label>
+    <div class="setting-control"><input id="name" name="name" value="{{ form.name }}" maxlength="253" placeholder="e.g. printer or printer.example.lan" autofocus required>
+      {% if errors.name %}<span class="error-text small">{{ errors.name }}</span>{% endif %}
+      <span class="muted small">A host name, short or in full.</span></div>
+  </div>
+  <div class="setting">
+    <label class="setting-name" for="mac">MAC</label>
+    <div class="setting-control"><input id="mac" name="mac" value="{{ form.mac }}" maxlength="32" placeholder="optional, aa:bb:cc:dd:ee:ff">
+      {% if errors.mac %}<span class="error-text small">{{ errors.mac }}</span>{% endif %}
+      <span class="muted small">The device that should be here: IPAM warns when the nodes see another one.{% if seen_mac and not form.mac %} The nodes last saw <code>{{ seen_mac }}</code>.{% endif %}</span></div>
+  </div>
+  <div class="setting">
+    <label class="setting-name" for="comment">Comment</label>
+    <div class="setting-control"><input id="comment" name="comment" value="{{ form.comment }}" maxlength="200">
+      {% if errors.ip %}<span class="error-text small">{{ errors.ip }}</span>{% endif %}</div>
+  </div>
+  {% call action_bar(cancel=back) %}<button type="submit">Save</button>{% endcall %}
+</form>
+{% if record %}
+<form method="post" action="/ipam/names/{{ ip }}/delete" class="spaced" data-confirm="Remove the IPAM name {{ record.name }} from {{ ip }}? Its comment goes with it." data-confirm-ok="Remove">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="back" value="{{ back }}">
+  <button type="submit" class="danger">Remove this name</button>
+</form>
+{% endif %}
+{% endblock %}

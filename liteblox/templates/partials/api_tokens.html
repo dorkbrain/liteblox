@@ -1,0 +1,49 @@
+{# API tokens: on the Users tab (every user's, admins) and on My account (your own). #}
+<section class="card spaced" id="tokens">
+  <h2>API tokens</h2>
+  <p class="muted small">For scripts and integrations calling the <a href="/api/docs">LiteBlox API</a> (<a href="/help/api">how it works</a>). A <strong>read-only</strong> token can only look; a <strong>full</strong> token can do whatever its user's role allows. Changing a password doesn't revoke tokens: revoke them here. For IPAM from a shell, <a href="/static/lbcli.py" download>lbcli.py</a> (Python 3.9+, <a href="/help/api#the-command-line-lbcli">how to use it</a>).</p>
+  {% if api_tokens %}
+  <div class="table-wrap"><table>
+    <thead><tr>{% if all_users %}<th>User</th>{% endif %}<th>Name</th><th>Scope</th><th>Token</th><th>Created</th><th>Last used</th><th>Expires</th><th></th></tr></thead>
+    <tbody>{% for t in api_tokens %}
+      <tr>
+        {% if all_users %}<td>{{ t.username }}</td>{% endif %}
+        <td><strong>{{ t.name }}</strong></td>
+        <td><span class="pill{{ ' warn' if t.scope == 'full' else '' }}">{{ 'full' if t.scope == 'full' else 'read only' }}</span></td>
+        <td><code>{{ t.prefix }}…</code></td>
+        <td class="small">{{ t.created_at|localtime }}{% if t.created_by and t.created_by != t.username %} <span class="muted">by {{ t.created_by }}</span>{% endif %}</td>
+        <td class="small">{% if t.last_used_at %}{{ t.last_used_at|reltime }} <span class="muted">from {{ t.last_used_ip }}</span>{% else %}never{% endif %}</td>
+        <td class="small">{% if t.expires_at %}{{ t.expires_at|localtime }}{% if t.expires_at <= now %} <span class="pill error">expired</span>{% endif %}{% else %}never{% endif %}</td>
+        <td class="actions">
+          <form method="post" action="/tokens/{{ t.id }}/revoke" class="inline" data-confirm="Revoke {{ t.username }}'s token {{ t.name }}? Anything using it stops working at once." data-confirm-ok="Revoke">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+            <input type="hidden" name="back" value="{{ back }}">
+            <button type="submit" class="link danger small">Revoke</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <p class="muted">No tokens yet.</p>
+  {% endif %}
+  <h3>Add a token</h3>
+  <form method="post" action="/tokens" class="stack form-card">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="back" value="{{ back }}">
+    <div class="row">
+      {% if all_users %}<label>For user
+        <select name="username">{% for u in users %}<option value="{{ u.username }}" {% if u.username == user.username %}selected{% endif %}>{{ u.username }} ({{ u.role }})</option>{% endfor %}</select></label>{% endif %}
+      <label>Name <input name="name" placeholder="e.g. monitoring" maxlength="64" required></label>
+    </div>
+    <div class="row">
+      <label>Scope
+        <select name="scope">
+          <option value="read">read only: GET calls only</option>
+          <option value="full">full: everything the user's role allows</option>
+        </select></label>
+      <label>Expires after (days) <input type="number" name="expires_days" min="1" max="3650" placeholder="never"></label>
+    </div>
+    <div><button type="submit">Add token</button></div>
+  </form>
+</section>

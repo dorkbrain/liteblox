@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+{% from 'partials/ui.html' import action_bar %}
+{% block title %}Move {{ ip }} · LiteBlox{% endblock %}
+{% block content %}
+<h1><a href="{{ back }}"><code>{{ ip }}</code></a> · Move</h1>
+<p class="page-intro muted">Give this address's names, PTRs, reservation and IPAM entry a new address, all at once.
+  DNS changes go into the drafts, reviewed and published together; a reservation changes at once.
+  <a href="/help/search#moving-an-address">More in Help</a>.</p>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+<form method="get" action="/addresses/{{ ip }}/move" class="inline-actions card">
+  <input type="hidden" name="back" value="{{ back }}">
+  <label for="move-to">New address</label>
+  <input id="move-to" name="to" value="{{ to }}" placeholder="e.g. 192.168.1.40" required autofocus>
+  <button type="submit" class="secondary">Preview</button>
+</form>
+
+{% if plan %}{% set p = plan %}
+<section class="card spaced">
+  <h2><span><code>{{ p.old }}</code> → <code>{{ p.new }}</code></span></h2>
+  {% if p.in_use %}<div class="notice spaced"><strong>{{ p.new }} may be in use:</strong>
+    <ul class="plain small">{% for t in p.in_use %}<li>{{ t }}</li>{% endfor %}</ul></div>{% endif %}
+  <dl class="facts">
+    <dt>A records</dt><dd>{% for f in p.forward %}{% for r in f.recs %}<code>{{ r.name.to_text() }}</code> <span class="muted small">in {{ f.zone }}</span>{% if not loop.last %}, {% endif %}{% endfor %}{% if not loop.last %}<br>{% endif %}{% else %}<span class="muted">none in a static zone</span>{% endfor %}</dd>
+    <dt>PTR</dt><dd>{% for line in ptr_lines %}<div>{{ line }}</div>{% else %}<span class="muted">nothing to change</span>{% endfor %}</dd>
+    {% if p.dynamic %}<dt>Dynamic zones</dt><dd>{% for h in p.dynamic %}<code>{{ h.rec.fqdn }}</code> <span class="muted small">{{ h.rec.rtype }} in {{ h.zone }}</span>{% if not loop.last %}, {% endif %}{% endfor %}
+      <div class="muted small">Left as they are: DHCP (or whoever updates the zone) owns these names.</div></dd>{% endif %}
+    {% if p.lease %}<dt>Lease</dt><dd><code>{{ p.lease.mac }}</code> <span class="pill">{{ p.lease.state }}</span> <span class="muted small">a client keeps a lease until it renews; Kea then hands out the new reserved address</span></dd>{% endif %}
+  </dl>
+  {% if p.pending %}<p class="notice small spaced">{{ p.pending|join(', ') }} already {{ 'has' if p.pending|length == 1 else 'have' }} changes waiting in a draft: they're published with this move.</p>{% endif %}
+  {% if p.nothing %}
+  <p class="muted spaced">Nothing in LiteBlox holds {{ p.old }}: there's nothing to move.</p>
+  {% else %}
+  <form method="post" action="/addresses/{{ ip }}/move" class="stack spaced">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="to" value="{{ p.new }}"><input type="hidden" name="token" value="{{ p.token }}">
+    <input type="hidden" name="back" value="{{ back }}">
+    {% for item in p.reservations %}{% set r = item.r %}
+    <label class="check"><input type="checkbox" name="reservation" value="1" {% if not item.errors %}checked{% else %}disabled{% endif %}>
+      <span>Move the reservation for <code>{{ r.hw_address }}</code>{% if r.hostname %} (<code>{{ r.hostname }}</code>){% endif %}
+        {%- if item.to_subnet and item.subnet and item.to_subnet.id != item.subnet.id %} from {{ item.subnet.prefix }} to {{ item.to_subnet.prefix }}{% endif %}
+        <span class="muted small">a DHCP job, started at once</span>
+        {% for e in item.errors.values() %}<span class="error-text small">{{ e }}</span>{% endfor %}
+        {% for w in item.warnings %}<span class="notice small">{{ w }}</span>{% endfor %}</span></label>
+    {% endfor %}
+    {% if p.ipam.assignment or p.ipam.note %}
+    <label class="check"><input type="checkbox" name="ipam" value="1" {% if not p.ipam.blocked %}checked{% else %}disabled{% endif %}>
+      <span>Move what IPAM keeps for it:
+        {%- if p.ipam.assignment %} {{ 'its IPAM record' if p.ipam.assignment.kind == 'ipam' else 'its assignment' }} <code>{{ p.ipam.assignment.name }}</code>{% if p.ipam.assignment.comment %} <span class="muted small">{{ p.ipam.assignment.comment }}</span>{% endif %}{% endif %}
+        {%- if p.ipam.note %}{{ ',' if p.ipam.assignment }} its comment <span class="muted small">{{ p.ipam.note }}</span>{% endif %}
+        {% if p.ipam.blocked %}<span class="error-text small">{{ p.ipam.blocked }}</span>{% endif %}</span></label>
+    {% endif %}
+    {% call action_bar(cancel=back) %}<button type="submit">Move to {{ p.new }}</button>{% endcall %}
+  </form>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,117 @@
+{% extends 'base.html' %}
+{% from 'partials/changes.html' import changes_list %}
+{% block title %}Review {{ zone_name }} · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+{% include 'partials/zone_tabs.html' %}
+<section class="card">
+  <h2>Nodes</h2>
+  {% if not states %}<p class="muted">No nodes serve this zone yet.</p>{% endif %}
+  <ul class="plain">
+  {% for st in states %}
+    <li>
+      <a href="/nodes/{{ st.node.id }}">{{ st.node.name }}</a>
+      {% if st.state == 'in-sync' %}<span class="pill ready">has the published copy</span>
+      {% elif st.state == 'behind' %}<span class="pill warn">older than the published copy</span>
+      {% elif st.state == 'drift' %}<span class="pill error">changed on the node</span>
+      {% else %}<span class="pill error">unreachable</span> <span class="error-text small">{{ st.error }}</span>{% endif %}
+      {% if st.loaded_serial %}<span class="muted small">serving {{ st.loaded_serial }}</span>{% endif %}
+    </li>
+    {% if st.state == 'drift' %}
+    <li class="drift">
+      <p class="small">{{ st.node.node_file }} on {{ st.node.name }} was edited outside LiteBlox since the last publish. Publishing is blocked until you choose:</p>
+      <pre class="log diff">{{ st.diff or 'Only whitespace or line endings differ.' }}</pre>
+      {% if user.is_admin %}
+      <div class="inline-actions">
+        <form method="post" action="/zones/{{ zone_name }}/nodes/{{ st.node.id }}/import">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="sha256" value="{{ st.sha256 }}">
+          <button type="submit" class="secondary">Keep the node's edit (import it into LiteBlox)</button>
+        </form>
+        <form method="post" action="/zones/{{ zone_name }}/nodes/{{ st.node.id }}/accept">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="sha256" value="{{ st.sha256 }}">
+          <button type="submit" class="secondary">Overwrite it on the next publish</button>
+        </form>
+      </div>
+      {% endif %}
+    </li>
+    {% endif %}
+  {% endfor %}
+  </ul>
+</section>
+{% if queued_ptr %}
+<section class="card spaced">
+  <h2>PTR updates sent with this publish</h2>
+  <p class="muted small">These reverse zones are dynamic, so their PTR records change by update once this publish succeeds. Discarding the draft drops them.</p>
+  <ul class="plain small">{% for rname, ops in queued_ptr %}{% for kind, address, target in ops %}
+    <li><code>{{ rname }}</code>: {% if kind == 'add' %}add PTR <code>{{ address }}</code> → <code>{{ target }}</code>{% else %}remove the PTR for <code>{{ address }}</code>{% endif %}</li>
+  {% endfor %}{% endfor %}</ul>
+</section>
+{% endif %}
+{% if not is_draft %}
+<section class="card spaced"><p class="muted">No pending changes. Edits on the Records or Raw tab go into a draft that shows up here.</p>
+  {% if behind and user.is_admin %}
+  <p>Some nodes don't have the published copy yet.</p>
+  <form method="post" action="/zones/{{ zone_name }}/publish">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="rev" value="{{ rev }}">
+    <label class="commit-message">Commit message <input name="message" value="Republish {{ zone_name }}" maxlength="200">
+      <span class="muted small">The new serial is added. Shown in History.</span></label>
+    <button type="submit" {% if blocked or running %}disabled{% endif %}>Republish to all nodes</button>
+  </form>
+  {% endif %}
+</section>
+{% else %}
+<div class="spaced"></div>
+{% if stale %}<p class="error">The published copy changed after this draft was started (another import or publish). Check the diff carefully, or discard the draft and redo the change.</p>{% endif %}
+<section class="card">
+  <h2>Changes</h2>
+  {% if summary %}{{ changes_list(summary) }}{% endif %}
+  {% if meta and meta.restored_from %}<p class="notice small">This draft restores <a href="/zones/{{ zone_name }}/history/{{ meta.restored_from }}">version {{ meta.restored_from[:10] }}</a> from the history.</p>{% endif %}
+  {% if meta and meta.put_in_order %}<p class="notice small">LiteBlox put this zone's records in <a href="/help/editing#records-are-kept-sorted">sorted order</a>, as it keeps every static zone. The records themselves are the same; publish it to make it the zone's file.</p>{% endif %}
+  {% if meta and meta.moved_comments %}<div class="notice small"><p>Publishing moves {{ meta.moved_comments|length }} comment line{{ '' if meta.moved_comments|length == 1 else 's' }} out of the zone file into the zone's <a href="/zones/{{ zone_name }}/settings#notes">notes</a>: LiteBlox keeps every zone sorted, where a comment on its own line would end up next to the wrong records.</p>
+    <ul class="plain">{% for c in meta.moved_comments %}<li><code>{{ c }}</code></li>{% endfor %}</ul></div>{% endif %}
+  {% if meta %}<p class="muted small">Draft by {{ meta.updated_by }}, last edited {{ meta.updated_at|localtime }}.</p>{% endif %}
+</section>
+{% for l in linked %}
+<section class="card spaced linked-zone">
+  <h2>Also published: <a href="/zones/{{ l.name }}"><code>{{ l.name }}</code></a> <span class="muted small">(PTR changes made by edits here)</span></h2>
+  {% if l.stale %}<p class="error">The published copy of {{ l.name }} changed after its draft started; discard and redo.</p>{% endif %}
+  {% if l.summary %}{{ changes_list(l.summary) }}
+  {% endif %}
+  <p class="small">named-checkzone:
+    {% if l.check[0] is none %}<span class="muted">{{ l.check[1] }}</span>{% elif l.check[0] %}<span class="pill ready">passes</span>{% else %}<span class="pill error">fails</span>{% endif %}
+    · nodes: {% for st in l.states %}{{ st.node.name }} <span class="pill {{ 'ready' if st.state in ('in-sync', 'behind') else 'error' }}">{{ st.state }}</span> {% endfor %}</p>
+  {% if l.check[0] is false %}<pre class="log">{{ l.check[1] }}</pre>{% endif %}
+  <details><summary class="muted small">File diff</summary><pre class="log diff">{{ l.diff }}</pre></details>
+</section>
+{% endfor %}
+<section class="card spaced">
+  <h2>named-checkzone</h2>
+  {% if check[0] is none %}<p class="muted">{{ check[1] }}</p>
+  {% elif check[0] %}<p><span class="pill ready">passes</span></p><pre class="log">{{ check[1] }}</pre>
+  {% else %}<p><span class="pill error">fails</span> Fix this before publishing.</p><pre class="log">{{ check[1] }}</pre>{% endif %}
+</section>
+<section class="card spaced">
+  <h2>File diff</h2>
+  <pre class="log diff">{{ diff }}</pre>
+</section>
+{% if user.is_admin %}
+<div class="spaced">
+  <label class="commit-message">Commit message <input form="publish-form" name="message" value="Publish {{ zone_name }}" maxlength="200" spellcheck="true">
+      <span class="muted small">The new serial is added{% if linked %}; {{ linked|map(attribute='name')|join(', ') }} get{{ 's' if linked|length == 1 }} the same message{% endif %}. Shown in History.</span></label>
+  <div class="inline-actions">
+  <form method="post" action="/zones/{{ zone_name }}/publish" id="publish-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="rev" value="{{ rev }}">
+    {% for l in linked %}<input type="hidden" name="rev:{{ l.name }}" value="{{ l.rev }}">{% endfor %}
+    <button type="submit" {% if blocked or running or stale or linked_bad or (check and check[0] == false) or not states %}disabled{% endif %}>Publish{% if linked %} {{ zone_name }} + {{ linked|map(attribute='name')|join(' + ') }}{% endif %} {% set copies = states|rejectattr('secondary')|list %}{% set secs = states|selectattr('secondary')|list %}to {% if secs %}{{ copies|map(attribute='node.name')|join(', ') }} ({{ secs|map(attribute='node.name')|join(', ') }} will transfer it){% else %}{{ states|length }} node{{ '' if states|length == 1 else 's' }}{% endif %}</button>
+  </form>
+  <form method="post" action="/zones/{{ zone_name }}/discard" data-confirm="Discard all pending changes to {{ zone_name }}{% for l in linked %} and {{ l.name }}{% endfor %}?" data-confirm-ok="Discard">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <button type="submit" class="secondary">Discard draft{% if linked %}s{% endif %}</button>
+  </form>
+  </div>
+</div>
+{% endif %}
+{% if blocked %}<p class="muted small">Publishing is blocked until every node is reachable and any node-side edits are resolved (see Nodes above).</p>{% endif %}
+{% if running %}<p class="muted small">A publish of this zone is already running.</p>{% endif %}
+{% endif %}
+{% endblock %}

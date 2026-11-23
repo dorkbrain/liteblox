@@ -1,0 +1,5 @@
+{# a unified diff with added and removed lines marked #}
+{% macro diff(text) -%}
+<pre class="log diff">{% for line in text.splitlines() %}{% if line.startswith('+++') or line.startswith('---') %}<span class="file">{{ line }}</span>{% elif line.startswith('@@') %}<span class="hunk">{{ line }}</span>{% elif line.startswith('+') %}<span class="add">{{ line }}</span>{% elif line.startswith('-') %}<span class="del">{{ line }}</span>{% else %}{{ line }}{% endif %}
+{% endfor %}</pre>
+{%- endmacro %}

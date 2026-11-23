@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% from 'partials/ui.html' import action_bar %}
+{% block title %}Confirm host key · LiteBlox{% endblock %}
+{% block content %}
+<h1>Confirm host key</h1>
+<section class="card form-card">
+  <p><strong>{{ form.host }}:{{ form.ssh_port }}</strong> presented this <code>{{ key_type }}</code> host key:</p>
+  <p class="fingerprint"><code>{{ fingerprint }}</code></p>
+  {% if node %}
+  {% if fingerprint == node.host_key_fp %}<p class="muted">This is the key already pinned for {{ node.name }}.</p>
+  {% else %}<p class="error">This is <strong>not</strong> the key pinned for {{ node.name }} (<code>{{ node.host_key_fp }}</code>). Expect that only if the server was reinstalled or replaced, or its SSH keys were regenerated.</p>{% endif %}
+  {% endif %}
+  <p class="muted">Compare it with the fingerprint from <a href="/help/node-prep#8-pre-flight-checklist">the pre-flight checklist</a>, or check it on the node with <code>ssh-keygen -lf /etc/ssh/ssh_host_{{ key_type.split('-')[1] if '-' in key_type else 'ed25519' }}_key.pub</code>. LiteBlox pins this key and refuses to connect if it ever changes.</p>
+  {% if node and (form.host != node.host or form.agent_port|int != node.agent_port) and node.agent_version %}
+  <p class="notice">The agent's certificate and config name the old {% if form.host != node.host %}address{% else %}agent port{% endif %}. After this, run <strong>Repair / upgrade agent</strong> to give it new ones.</p>
+  {% endif %}
+  <form method="post" action="{% if node %}/nodes/{{ node.id }}/edit/confirm{% else %}/nodes/confirm{% endif %}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    {% for k in ('name', 'host', 'ssh_port', 'agent_port') if k in form %}<input type="hidden" name="{{ k }}" value="{{ form[k] }}">{% endfor %}
+    {% if not node %}<input type="hidden" name="services" value="1"><input type="hidden" name="bind" value="{{ 1 if form.bind else 0 }}">{% endif %}
+    <input type="hidden" name="fingerprint" value="{{ fingerprint }}">
+    {% call action_bar('/nodes/' ~ node.id if node else '/nodes') %}<button type="submit">The key matches: {{ 'save ' ~ node.name if node else 'add ' ~ form.name }}</button>{% endcall %}
+  </form>
+</section>
+{% endblock %}

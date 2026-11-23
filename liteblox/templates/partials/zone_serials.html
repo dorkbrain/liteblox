@@ -1,0 +1,10 @@
+{% for zone_id, nodes in serials.items() %}
+<td id="serials-{{ zone_id }}" class="small" hx-swap-oob="true">
+  {% for n in nodes %}
+  <span class="node-serial">{{ n.node }}
+    {% if n.error %}<span class="pill error" title="{{ n.error }}">unreachable</span>
+    {% elif n.serial %}<code>{{ n.serial }}</code>
+    {% else %}<span class="pill warn">not loaded</span>{% endif %}</span>{% if not loop.last %} · {% endif %}
+  {% endfor %}
+</td>
+{% endfor %}

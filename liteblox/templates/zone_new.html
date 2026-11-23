@@ -1,0 +1,91 @@
+{% extends 'base.html' %}
+{% from 'partials/ui.html' import action_bar %}
+{% block title %}Add zone · LiteBlox{% endblock %}
+{% block content %}
+{% set kind = form.kind if form.kind in ('reverse', 'forwarding') else 'forward' %}
+{% set reverse = kind == 'reverse' %}
+{% set roff = recursion_off|default({}) %}
+<div class="heading"><h1><a href="/zones">Zones</a> · Add zone</h1></div>
+<section class="card form-card">
+  <p class="muted">LiteBlox declares the zone on the nodes you pick and checks that each one serves it, backing each node up first. For a forward or reverse zone it also writes the zone file; the primary always serves it and the other nodes become its secondaries.</p>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="/zones/new" class="stack" id="new-zone">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <div class="kind-picker" role="radiogroup" aria-label="Kind of zone">
+      <label><input type="radio" name="kind" value="forward" {% if kind == 'forward' %}checked{% endif %}>
+        <span><strong>Forward lookup</strong><span class="muted small">Names to addresses: A, AAAA, MX, …</span></span></label>
+      <label><input type="radio" name="kind" value="reverse" {% if reverse %}checked{% endif %}>
+        <span><strong>Reverse lookup</strong><span class="muted small">Addresses to names (PTR), for one network</span></span></label>
+      <label><input type="radio" name="kind" value="forwarding" {% if kind == 'forwarding' %}checked{% endif %}>
+        <span><strong>Forwarding only</strong><span class="muted small">A domain other servers answer; no records here</span></span></label>
+    </div>
+    <fieldset class="plain" data-kind="forward" {% if kind != 'forward' %}hidden disabled{% endif %}>
+      <label>Zone name <input name="name" value="{{ form.name or '' }}" placeholder="example.lab" required {% if kind == 'forward' %}autofocus{% endif %}></label>
+    </fieldset>
+    <fieldset class="plain" data-kind="forwarding" {% if kind != 'forwarding' %}hidden disabled{% endif %}>
+      <label>Domain <input name="fwd_name" value="{{ form.fwd_name or '' }}" placeholder="corp.example" required spellcheck="false"></label>
+      <label><span>Forwarders, one per line: an IP address, optionally followed by <code>port N</code></span>
+        <textarea name="forwarders" rows="2" required spellcheck="false" placeholder="10.0.0.53&#10;10.0.1.53">{{ form.forwarders or '' }}</textarea></label>
+      <label>When the forwarders don't answer
+        <select name="forward_mode">
+          <option value="only" {% if form.forward_mode != 'first' %}selected{% endif %}>fail (forward only)</option>
+          <option value="first" {% if form.forward_mode == 'first' %}selected{% endif %}>look it up the normal way (forward first)</option>
+        </select></label>
+      <label class="check"><input type="checkbox" name="validate_except" value="1" {% if form.validate_except or form.kind != 'forwarding' %}checked{% endif %}>
+        <span>Don't DNSSEC-validate this domain on these nodes (<code>validate-except</code>). Needed for a private domain such as <code>corp</code> or <code>home.lab</code>: the public DNS says it doesn't exist, so validating the forwarders' answers would fail.</span></label>
+    </fieldset>
+    <fieldset class="plain" data-kind="reverse" {% if not reverse %}hidden disabled{% endif %}>
+      <label>Network <input name="network" value="{{ form.network or '' }}" placeholder="192.168.1.0/24" required
+        hx-get="/zones/new/reverse-name" hx-trigger="input changed delay:250ms, kindshown, load[this.value]"
+        hx-sync="this:replace" hx-target="#reverse-name"></label>
+      <p class="muted small" id="reverse-name" aria-live="polite"></p>
+    </fieldset>
+    <fieldset class="plain" data-kinds="forward reverse" {% if kind == 'forwarding' %}hidden disabled{% endif %}>
+    <label><span>Nameservers, one per line<span data-kind="forward" {% if kind != 'forward' %}hidden{% endif %}>; names inside the zone need an address</span></span>
+      <textarea name="nameservers" rows="3" required spellcheck="false"
+        data-forward="ns1.example.lab 192.168.1.213&#10;ns2.example.lab 192.168.1.214" data-reverse="ns1.example.lab&#10;ns2.example.lab"
+        placeholder="{% if reverse %}ns1.example.lab&#10;ns2.example.lab{% else %}ns1.example.lab 192.168.1.213&#10;ns2.example.lab 192.168.1.214{% endif %}">{{ form.nameservers or '' }}</textarea></label>
+    <div class="row">
+      <label>Responsible mailbox (optional) <input name="rname" value="{{ form.rname or '' }}" placeholder="hostmaster.example.lab."></label>
+      <label>Default TTL <input name="ttl" value="{{ form.ttl or '1h' }}" placeholder="1h" spellcheck="false"></label>
+    </div>
+    </fieldset>
+    <fieldset data-kinds="forward reverse" {% if kind == 'forwarding' %}hidden disabled{% endif %}>
+      <legend>Serve it on</legend>
+      {% for n in nodes %}
+      {% if n.role == 'primary' %}<input type="hidden" name="nodes" value="{{ n.id }}">
+      <label class="check"><input type="checkbox" checked disabled><span>{{ n.name }} <span class="pill">primary</span> <span class="muted small">{{ n.host }}</span></span></label>
+      {% else %}<label class="check"><input type="checkbox" name="nodes" value="{{ n.id }}" {% if chosen is not defined or n.id|string in chosen %}checked{% endif %}><span>{{ n.name }}{% if n.role %} <span class="muted small">({{ n.role }})</span>{% endif %} <span class="muted small">{{ n.host }}</span></span></label>{% endif %}
+      {% else %}<p class="muted">No nodes are set up yet.</p>{% endfor %}
+    </fieldset>
+    <fieldset data-kind="forwarding" {% if kind != 'forwarding' %}hidden disabled{% endif %}>
+      <legend>Forward it on</legend>
+      {% for n in nodes %}
+      <label class="check"><input type="checkbox" name="nodes" value="{{ n.id }}" {% if chosen is not defined or n.id|string in chosen %}checked{% endif %}><span>{{ n.name }}{% if n.role %} <span class="muted small">({{ n.role }})</span>{% endif %} <span class="muted small">{{ n.host }}</span>
+        {% if roff.get(n.id) %}<span class="pill warn">recursion is off here, so it won't forward for anyone</span>{% endif %}</span></label>
+      {% else %}<p class="muted">No nodes are set up yet.</p>{% endfor %}
+      <p class="muted small">Forwarding is part of recursion: clients use it only on nodes that allow them to recurse (<code>allow-recursion</code>).</p>
+    </fieldset>
+    {% call action_bar('/zones') %}<button type="submit">Add zone</button>{% endcall %}
+  </form>
+</section>
+<script>
+  // show the fields for the chosen kind; disabled fieldsets are neither validated nor submitted
+  (function () {
+    const form = document.getElementById('new-zone');
+    form.addEventListener('change', function (e) {
+      if (e.target.name !== 'kind') return;
+      const kind = e.target.value;
+      form.querySelectorAll('[data-kind], [data-kinds]').forEach(function (el) {
+        el.hidden = !(el.dataset.kinds || el.dataset.kind).split(' ').includes(kind);
+        if (el.tagName === 'FIELDSET') el.disabled = el.hidden;
+      });
+      const ns = form.elements.nameservers;
+      if (ns.dataset[kind]) ns.placeholder = ns.dataset[kind];
+      const input = form.querySelector('fieldset[data-kind="' + kind + '"] input');
+      input.focus();
+      if (kind === 'reverse' && input.value) htmx.trigger(input, 'kindshown');
+    });
+  })();
+</script>
+{% endblock %}

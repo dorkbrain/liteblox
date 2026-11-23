@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+{% from 'partials/changes.html' import changes_list %}
+{% block title %}Compare {{ zone_name }} · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+{% include 'partials/zone_tabs.html' %}
+<section class="card">
+  <h2>Compare versions</h2>
+  <dl class="facts">
+    <dt>From</dt><dd><a href="/zones/{{ zone_name }}/history/{{ older.sha }}">{{ older.subject }}</a> <span class="muted small">{{ older.author }} · {{ older.date|localtime }}</span></dd>
+    <dt>To</dt><dd><a href="/zones/{{ zone_name }}/history/{{ newer.sha }}">{{ newer.subject }}</a> <span class="muted small">{{ newer.author }} · {{ newer.date|localtime }}</span></dd>
+  </dl>
+  {% if between|length > 2 %}
+  <details><summary class="small">{{ between|length - 1 }} versions apart</summary>
+    <ul class="plain small">{% for c in between %}<li><a href="/zones/{{ zone_name }}/history/{{ c.sha }}">{{ c.subject }}</a> <span class="muted">{{ c.author }} · {{ c.date|localtime }}</span></li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+</section>
+<section class="card spaced">
+  <h2>Changes</h2>
+  {% if summary %}{{ changes_list(summary) }}{% else %}<p class="muted">One of the versions doesn't parse, so only the file diff is shown.</p>{% endif %}
+</section>
+<section class="card spaced">
+  <h2>File diff</h2>
+  <pre class="log diff">{{ diff or 'The two versions are identical.' }}</pre>
+</section>
+<p><a class="button secondary" href="/zones/{{ zone_name }}/history">Back to History</a></p>
+{% endblock %}

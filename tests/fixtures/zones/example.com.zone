@@ -1,0 +1,34 @@
+; example.com: synthetic edge cases for the zone-file parser
+$TTL 1h
+$ORIGIN example.com.
+@	IN	SOA	ns1.example.com. hostmaster.example.com. (
+		2026010101	; serial
+		3600		; refresh
+		900		; retry
+		1209600		; expire
+		300 )		; negative TTL
+	IN	NS	ns1
+	IN	NS	ns2.example.net.
+	IN	MX	10 mail
+	IN	TXT	"v=spf1 mx -all"
+
+@	300	IN	A	192.0.2.1
+ns1	IN	A	192.0.2.53
+mail	3600	IN	A	192.0.2.25	; mail server
+	IN	AAAA	2001:db8::25
+www  IN  CNAME  @   
+txt	IN	TXT	"semicolon ; inside quotes" "and \"escaped\" quotes"
+long	IN	TXT	( "first part of a long record "
+		  "second part" )	; split over lines
+_sip._tcp	IN	SRV	10 60 5060 sip
+*.wild	IN	A	192.0.2.99
+	600	IN	A	192.0.2.100
+caa	IN	CAA	0 issue "letsencrypt.org"
+sip	IN 120	A	192.0.2.60
+
+; a sub-origin section
+$ORIGIN sub.example.com.
+host	IN	A	192.0.2.200
+$GENERATE 10-12 dyn$ A 192.0.2.$
+$ORIGIN example.com.
+last IN A 192.0.2.250

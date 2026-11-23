@@ -1,0 +1,70 @@
+{% extends 'base.html' %}
+{% from 'partials/ui.html' import action_bar %}
+{% from 'partials/settings.html' import setting %}
+{% block title %}DHCP settings · LiteBlox{% endblock %}
+{% macro field(name, placeholder='', rows=None) %}{% if rows %}<textarea id="f-{{ name }}" name="{{ name }}" rows="{{ rows }}" spellcheck="false" placeholder="{{ placeholder }}" {% if not user.is_admin %}readonly{% endif %}>{{ v[name] }}</textarea>{% else %}<input id="f-{{ name }}" name="{{ name }}" value="{{ v[name] }}" placeholder="{{ placeholder }}" spellcheck="false" {% if not user.is_admin %}readonly{% endif %}>{% endif %}{% if errors[name] %}<div class="error-text small">{{ errors[name] }}</div>{% endif %}{% endmacro %}
+{% block content %}
+<h1><a href="/dhcp">DHCP</a> · Settings</h1>
+<p class="muted small page-intro">These apply to every subnet; a subnet's own fields override them. Empty: Kea's default.</p>
+{% if errors %}<p class="error" role="alert">Not saved: fix the fields marked below.</p>{% endif %}
+<form method="post" action="/dhcp/settings" id="dhcp-settings"
+      data-confirm="Apply these DHCP settings? Each DHCP node is backed up, changed and checked; a failure rolls everything back." data-confirm-ok="Apply">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  <section class="card form-card settings">
+    <h2>Options</h2>
+    {% call setting('Router', 'routers', None, 'f-routers') %}{{ field('routers', 'none') }}{% endcall %}
+    {% call setting('DNS servers', 'domain-name-servers', None, 'f-dns') %}{{ field('dns', 'none') }}{% endcall %}
+    {% call setting('Domain', 'domain-name', None, 'f-domain') %}{{ field('domain') }}{% endcall %}
+    {% call setting('Search domains', 'domain-search', None, 'f-search') %}{{ field('search') }}{% endcall %}
+    {% call setting('NTP servers', 'ntp-servers', None, 'f-ntp') %}{{ field('ntp') }}{% endcall %}
+    {% call setting('Extra options', 'option-data', 'Kea\'s JSON list of other options.', 'f-extra_options') %}{{ field('extra_options', '[]', 3) }}{% endcall %}
+  </section>
+  <section class="card form-card settings spaced" id="dns" x-data="{ mode: '{{ v.ddns_mode }}' }">
+    <h2>DNS registration</h2>
+    <p class="muted small">Where Kea registers the clients of subnets that ask for it (each subnet's Settings → DNS registration): their names and PTRs, added when they get a lease and removed when it ends.</p>
+    {% call setting('Register') %}
+      <div class="radio-list">
+        {% if dns_on or v.ddns_mode == 'liteblox' %}<label class="check"><input type="radio" name="ddns_mode" value="liteblox" x-model="mode" {% if v.ddns_mode == 'liteblox' %}checked{% endif %} {% if not user.is_admin %}disabled{% endif %}><span>through LiteBlox's DNS primary</span></label>{% endif %}
+        <label class="check"><input type="radio" name="ddns_mode" value="external" x-model="mode" {% if v.ddns_mode == 'external' %}checked{% endif %} {% if not user.is_admin %}disabled{% endif %}><span>at another DNS server</span></label>
+        <label class="check"><input type="radio" name="ddns_mode" value="off" x-model="mode" {% if v.ddns_mode == 'off' %}checked{% endif %} {% if not user.is_admin %}disabled{% endif %}><span>off: clients aren't registered</span></label>
+      </div>
+      {% if errors.ddns_mode %}<div class="error-text small">{{ errors.ddns_mode }}</div>{% endif %}{% endcall %}
+    <div x-show="mode === 'liteblox'"{% if v.ddns_mode != 'liteblox' %} x-cloak{% endif %}>
+    {% call setting('Key', None, 'The TSIG key Kea signs its DNS updates with. It needs grants in the subnets\' zones (the subnet\'s review says which, and can add them). <a href="/settings/keys">TSIG keys</a>', 'f-ddns_key_id') %}
+      <select id="f-ddns_key_id" name="ddns_key_id" {% if not user.is_admin %}disabled{% endif %}><option value="">none: no DNS registration</option>
+        {% for k in keys %}<option value="{{ k.id }}" {% if v.ddns_key_id|string == k.id|string %}selected{% endif %}>{{ k.name }} ({{ k.algorithm }})</option>{% endfor %}</select>
+      {% if errors.ddns_key_id %}<div class="error-text small">{{ errors.ddns_key_id }}</div>{% endif %}{% endcall %}
+    </div>
+    <div x-show="mode === 'external'"{% if v.ddns_mode != 'external' %} x-cloak{% endif %}>
+    {% call setting('DNS server', None, 'The primary of the zones clients go in: Kea sends its updates (RFC 2136) there.', 'f-ddns_server') %}
+      <span class="inline-actions"><input id="f-ddns_server" name="ddns_server" value="{{ v.ddns_server }}" placeholder="192.168.1.2" spellcheck="false" {% if not user.is_admin %}readonly{% endif %}>
+        <label class="small">port <input name="ddns_port" value="{{ v.ddns_port }}" class="num" inputmode="numeric" aria-label="Port" {% if not user.is_admin %}readonly{% endif %}></label></span>
+      {% if errors.ddns_server %}<div class="error-text small">{{ errors.ddns_server }}</div>{% endif %}
+      {% if errors.ddns_port %}<div class="error-text small">{{ errors.ddns_port }}</div>{% endif %}{% endcall %}
+    {% call setting('Key', None, 'The TSIG key that server lets update those zones, as in its key file. It stays in LiteBlox\'s database and Kea\'s config: never in BIND.', 'f-ddns_key_name') %}
+      <span class="inline-actions"><input id="f-ddns_key_name" name="ddns_key_name" value="{{ v.ddns_key_name }}" placeholder="name, e.g. dhcp-updater" spellcheck="false" {% if not user.is_admin %}readonly{% endif %}>
+        <select name="ddns_key_algorithm" aria-label="Algorithm" {% if not user.is_admin %}disabled{% endif %}>{% for a in algorithms %}<option {% if v.ddns_key_algorithm == a %}selected{% endif %}>{{ a }}</option>{% endfor %}</select></span>
+      {% if user.is_admin %}<input name="ddns_key_secret" type="password" autocomplete="off" value="" placeholder="{{ 'saved: leave empty to keep it' if has_secret else 'the secret (base64)' }}" aria-label="Secret" spellcheck="false">{% endif %}
+      {% for f in ('ddns_key_name', 'ddns_key_algorithm', 'ddns_key_secret') %}{% if errors[f] %}<div class="error-text small">{{ errors[f] }}</div>{% endif %}{% endfor %}{% endcall %}
+    {% if user.is_admin %}
+    {% call setting('Test', None, 'Asks the server for the SOA of each registering subnet\'s domain and reverse zones, signed with the key: does it know the key and hold the zones? Whether it lets the key update them is up to its policy.') %}
+      <button type="button" class="secondary small" hx-post="/dhcp/settings/ddns-test" hx-include="#dhcp-settings" hx-target="#ddns-test" hx-swap="innerHTML" hx-disabled-elt="this">Test</button>
+      <div id="ddns-test"></div>{% endcall %}
+    {% endif %}
+    </div>
+  </section>
+  <section class="card form-card settings spaced">
+    <h2>Leases</h2>
+    {% call setting('Lease time', 'valid-lifetime', 'Seconds (Kea: 7200).', 'f-valid_lifetime') %}{{ field('valid_lifetime') }}{% endcall %}
+    {% call setting('Renew after', 'renew-timer', None, 'f-renew_timer') %}{{ field('renew_timer') }}{% endcall %}
+    {% call setting('Rebind after', 'rebind-timer', None, 'f-rebind_timer') %}{{ field('rebind_timer') }}{% endcall %}
+    {% call setting('Authoritative', 'authoritative', 'Answer a client asking for an address that isn\'t valid here with a NAK, so it starts over at once. Turn it on when Kea is the only DHCP server on its networks.', 'f-authoritative') %}
+      <label class="check"><input type="checkbox" id="f-authoritative" name="authoritative" value="1" {% if v.authoritative %}checked{% endif %} {% if not user.is_admin %}disabled{% endif %}><span>authoritative</span></label>{% endcall %}
+  </section>
+  {% if user.is_admin %}
+  <div id="settings-review"></div>
+  {% call action_bar('/dhcp', sticky=True) %}<button type="button" hx-post="/dhcp/settings/preview" hx-include="#dhcp-settings"
+    hx-target="#settings-review" hx-swap="innerHTML show:#settings-review:top">Review changes</button>{% endcall %}
+  {% endif %}
+</form>
+{% endblock %}

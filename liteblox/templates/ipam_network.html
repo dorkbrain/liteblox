@@ -1,0 +1,103 @@
+{% extends 'ipam_base.html' %}
+{% from 'partials/ipam_map.html' import address_map, block_strip, donut %}
+{% from 'partials/dhcp_addresses.html' import filter_box, sorting with context %}
+{% block title %}{{ network.label }} · IPAM · LiteBlox{% endblock %}
+{% set base = '/ipam/networks/' ~ network.id %}
+{% block ipam %}
+<div class="heading">
+  <h1>{% for p in path %}<a href="/ipam/networks/{{ p.id }}">{{ p.label }}</a> · {% endfor %}{{ network.label }}{% if network.name %} <code class="muted">{{ network.prefix }}</code>{% endif %}</h1>
+  {% if user.is_admin %}<a class="button secondary" href="{{ base }}/settings">Settings</a>{% endif %}
+</div>
+<p class="page-intro muted small">
+  {%- if network.comment %}{{ network.comment }} · {% endif %}{{ network.usable }} usable addresses
+  {%- if probe_nodes %} · seen from {% for n in probe_nodes %}<a href="/nodes/{{ n.id }}">{{ n.name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
+  {%- else %} · no LiteBlox node is on this network: its page shows DNS and DHCP only, and nothing can be checked from here{% endif %}</p>
+{% for w in warnings %}<p class="notice small">{{ w }}</p>{% endfor %}
+{% for r in flapping %}<p class="notice flap"><strong><a href="/search?q={{ r.ip }}#address">{{ r.ip }}</a></strong>: {{ r.macs|length }} different MACs ({{ r.changes }} changes in a few minutes): two devices may be using this address.</p>{% endfor %}
+
+<div class="ipam-top">
+  <section class="card">
+    <h2>Overview <span class="muted small">{{ bounds[0] }} – {{ bounds[1] }}</span></h2>
+    {% if blocks %}{{ block_strip(blocks, page, base) }}{% endif %}
+    {{ address_map(cells, highlight) }}
+    <div class="ipam-legend small">
+      {% for key, (label, pill) in states.items() if key != 'named' or counts.named %}<span><i class="s-{{ key }}"></i>{{ label }}</span>{% endfor %}
+      {% for r, used in range_counts %}<span><i class="band band-{{ loop.index0 % 4 }}"></i>{{ r.label }} <span class="muted">{{ r.first }} – {{ r.last }} · {{ used }}/{{ r.size }}</span></span>{% endfor %}
+      <span><i class="flag-key"></i>something to check</span>
+    </div>
+  </section>
+  <section class="card">
+    <h2>Utilization</h2>
+    {{ donut(segments, [('reserved', 'Reserved', counts.reserved), ('named', 'Named in IPAM', counts.named), ('leased', 'Leased', counts.leased), ('dns', 'DNS only', counts.dns), ('seen', 'Seen only', counts.seen), ('free', 'Free', counts.free)], (network.usable - counts.free) ~ ' of ' ~ network.usable ~ ' in use') }}
+    <p class="small">{{ network.usable - counts.free }} of {{ network.usable }} in use</p>
+  </section>
+</div>
+
+<section class="card spaced">
+  <div class="toolbar">
+    <h2 class="grow">Addresses</h2>
+    {{ filter_box() }}
+    <a class="small" href="{{ base }}?page={{ page }}{% if not used_only %}&used=1{% endif %}">{{ 'Show every address' if used_only else 'Used only' }}</a>
+    <a class="small" href="/ipam/networks/{{ network.id }}/addresses.csv{{ '?used=1' if used_only }}" title="Download {{ 'the used addresses' if used_only else 'every address' }} of {{ network.prefix }} as CSV, all pages">Export CSV</a>
+  </div>
+  <div class="table-wrap"><table class="addresses ipam-table">
+    <thead><tr>{% for key, label in [('ip', 'IP'), ('state', 'State'), ('name', 'Names'), ('mac', 'MAC'), ('lease', 'Last seen')] %}<th{% if key == 'ip' %} aria-sort="ascending"{% endif %}><button type="button" class="sort" data-sort="{{ key }}">{{ label }}</button></th>{% endfor %}<th>DHCP</th><th>Range</th><th>Comment</th><th>Checks</th>{% if user.is_admin %}<th></th>{% endif %}</tr></thead>
+    <tbody>{% for a in rows %}{% set l = a.lease %}{% set r = a.reservation %}
+    <tr id="ip-{{ a.ip }}" class="{{ 'free' if a.state == 'free' }}{{ ' focus' if highlight and a.ip == highlight }}{{ ' flap' if a.flapping }}"
+        data-search="{{ (a.ip ~ ' ' ~ a.mac ~ ' ' ~ a.vendor ~ ' ' ~ a.hostname ~ ' ' ~ a.label ~ ' ' ~ a.comment ~ ' ' ~ (a.names|map(attribute='rec.fqdn')|join(' ')) ~ ' ' ~ (a.ipam.name if a.ipam else '') ~ ' ' ~ a.rdns_name ~ ' ' ~ (a.range.label if a.range else ''))|lower }}"
+        data-order="{{ loop.index0 }}" data-mac="{{ a.mac|lower }}" data-name="{{ (a.names[0].rec.fqdn if a.names else a.ipam.name if a.ipam else a.hostname or a.rdns_name)|lower }}" data-state="{{ a.label }}"
+        data-lease="{{ now - a.seen.last_seen if a.seen else '' }}">
+      <td><code>{{ a.ip }}</code></td>
+      <td>{% if a.kind != 'host' %}<span class="muted small">{{ a.kind }}</span>{% else %}<span class="pill s-{{ a.state }}">{{ a.label }}</span>{% endif %}</td>
+      <td>{% for h in a.names %}<a href="{{ record_link(h) }}"><code>{{ h.rec.fqdn }}</code></a>{% if h.dynamic %} <span class="muted small">dynamic</span>{% endif %}{% if not loop.last %}<br>{% endif %}{% endfor %}
+        {%- if a.ipam %}{% if a.names %}<br>{% endif %}<code>{{ a.ipam.name }}</code> <span class="muted small">IPAM</span>{% endif %}
+        {%- if not a.names and not a.ipam and a.hostname %}<code>{{ a.hostname }}</code> <span class="muted small">DHCP</span>{% endif %}
+        {%- if not a.names and a.ptrs %}{% for h in a.ptrs %}<span class="muted small">PTR</span> <code>{{ h.rec.target }}</code>{% endfor %}{% endif %}
+        {%- if a.rdns_name %}{% if a.names or a.ipam or a.hostname or a.ptrs %}<br>{% endif %}<code>{{ a.rdns_name }}</code> <span class="muted small" title="its PTR at {{ resolver }}, looked up {{ a.rdns.looked_up_at|ago }}">rDNS</span>{% endif %}</td>
+      <td>{% if a.mac %}<a href="/ipam/devices/{{ a.mac|urlencode }}"><code>{{ a.mac }}</code></a>{% if a.vendor %}<div class="muted small">{{ a.vendor }}</div>{% endif %}{% endif %}
+        {%- if a.seen and a.seen.macs > 1 %}<div class="small"><a href="/search?q={{ a.ip }}#address">{{ a.seen.macs }} MACs seen</a></div>{% endif %}</td>
+      <td class="nowrap small">{% if a.seen %}{{ a.seen.last_seen|reltime }}{% if a.flapping %} <span class="pill warn">flapping</span>{% endif %}{% endif %}</td>
+      <td class="nowrap small">
+        {%- if r %}<a href="/dhcp/subnets/{{ r.subnet_id }}/reservations/{{ r.id }}">reserved</a>{% if l %} · online{% endif %}
+        {%- elif l %}<span title="{{ l.expires|localtime }}">lease{% if l.expires_in > 0 %}, ends in {{ l.expires_in|duration }}{% endif %}</span>
+        {%- elif a.in_pool %}<span class="muted">pool</span>{% endif %}</td>
+      <td class="small">{% if a.range %}{{ a.range.label }}{% endif %}</td>
+      <td class="small comment-cell" x-data="{ edit: false }">
+        {%- set w = a.comment_from %}
+        <span x-show="!edit">{{ a.comment }}{% if a.comment %}<span class="muted block">{% if w.kind == 'dns' %}A record in {{ w.zone }}{% elif w.kind == 'reservation' %}reservation{% elif w.kind == 'ipam' %}IPAM record{% else %}IPAM note{% endif %}</span>{% endif %}</span>
+        {%- if user.is_admin and a.kind == 'host' %}
+        <button type="button" class="link small" x-show="!edit" @click="edit = true; $nextTick(() => $refs.c.focus())" title="{% if w.kind == 'dns' %}saved on the A record {{ w.fqdn }} in {{ w.zone }} (a draft){% elif w.kind == 'reservation' %}saved on the DHCP reservation{% elif w.kind == 'ipam' %}saved on the IPAM record{% else %}saved as an IPAM note{% endif %}">Edit</button>
+        <form method="post" action="/ipam/comment" x-show="edit" x-cloak class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="ip" value="{{ a.ip }}">
+          <input type="hidden" name="kind" value="{{ w.kind }}"><input type="hidden" name="back" value="{{ base }}?page={{ page }}{{ '&used=1' if used_only }}">
+          {% if w.kind == 'dns' %}<input type="hidden" name="zone" value="{{ w.zone }}"><input type="hidden" name="fqdn" value="{{ w.fqdn }}">{% elif w.kind == 'reservation' %}<input type="hidden" name="id" value="{{ w.id }}">{% endif %}
+          <input name="comment" value="{{ a.comment }}" x-ref="c" @keydown.escape="edit = false; $refs.c.value = $refs.c.defaultValue" aria-label="Comment for {{ a.ip }}">
+          <button type="submit" class="small">Save</button>
+          <button type="button" class="secondary small" @click="edit = false; $refs.c.value = $refs.c.defaultValue">Cancel</button>
+        </form>{% endif %}</td>
+      <td class="small">{% for level, text, link in a.checks %}<div class="check-{{ level }}">{% if link %}<a href="{{ link }}">{{ text }}</a>{% else %}{{ text }}{% endif %}</div>{% endfor %}</td>
+      {% if user.is_admin %}<td class="actions small">{% if a.kind == 'host' %}
+        <a href="/search?q={{ a.ip }}">Card</a>
+        {%- set name_back = base ~ '?ip=' ~ a.ip %}
+        {%- if a.names or r or a.ipam %} · <a href="/addresses/{{ a.ip }}/move?back={{ name_back|urlencode }}" title="give its names, PTR, reservation and IPAM entry a new address">Move…</a>{% endif %}
+        {%- if a.ipam %} · <a href="/ipam/names/{{ a.ip }}?back={{ name_back|urlencode }}">Name</a>
+        {%- elif a.nameable and not a.names and not r %} · <a href="/ipam/names/{{ a.ip }}?back={{ name_back|urlencode }}" title="a name kept in IPAM only">Name…</a>{% endif %}
+        {%- if a.state == 'free' %}
+        {%- if a.subnet %} · <a href="/dhcp/subnets/{{ a.subnet.id }}/reservations/new?ip={{ a.ip }}">Reserve…</a>{% endif %}
+        {%- if probe_nodes %} · <button type="button" class="link small" hx-post="/ipam/check" hx-vals='{"ip": "{{ a.ip }}"}' hx-swap="outerHTML" title="ping it once and read the node's neighbour table">Check</button>{% endif %}
+        {%- elif l and not r and a.subnet %} · <a href="/dhcp/subnets/{{ a.subnet.id }}/reservations/new?mac={{ l.mac|urlencode }}&ip={{ a.ip }}&hostname={{ l.hostname|urlencode }}">Reserve</a>
+        {%- endif %}{% endif %}</td>{% endif %}
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  {% if not rows %}<p class="muted">Nothing in use here yet.</p>{% endif %}
+  {% if pages > 1 %}
+  <nav class="pager small" aria-label="Pages">
+    {% if page > 0 %}<a href="{{ base }}?page={{ page - 1 }}{{ '&used=1' if used_only }}">← {{ (bounds[0] - 256) }}/24</a>{% endif %}
+    <span class="muted">{{ bounds[0] }}/24 · page {{ page + 1 }} of {{ pages }}</span>
+    {% if page < pages - 1 %}<a href="{{ base }}?page={{ page + 1 }}{{ '&used=1' if used_only }}">{{ (bounds[0] + 256) }}/24 →</a>{% endif %}
+  </nav>
+  {% endif %}
+</section>
+<p class="muted small">Names come from every zone (static zones as drafted), IPAM's own records{% if resolver %}, the PTRs at {{ resolver }} (rDNS, looked up when this page opens){% endif %}, and DHCP from LiteBlox and Kea just now. A comment is saved where it lives: on the A record (a draft in its zone), on the reservation, on the IPAM record, or as an IPAM note.</p>
+{{ sorting() }}
+{% endblock %}

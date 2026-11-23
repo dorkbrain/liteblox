@@ -1,0 +1,37 @@
+{% extends 'ipam_base.html' %}
+{% from 'partials/ui.html' import action_bar %}
+{% from 'partials/charts.html' import meter %}
+{% block title %}IPAM · LiteBlox{% endblock %}
+{% block ipam %}
+<h1>IPAM</h1>
+<p class="page-intro muted">Every network you add here shows what uses each of its addresses: DNS names, DHCP reservations and leases. Networks nest by their prefixes: a network inside another one goes under it, and a network that holds others (a site, say) holds no addresses of its own. <a href="/help/ipam">More in Help</a>.</p>
+{% if roots %}
+<div class="grid">
+  {% for n in roots %}{% set u = use[n.id] %}
+  <section class="card">
+    <h2><a href="/ipam/networks/{{ n.id }}">{{ n.label }}</a></h2>
+    <p class="small muted"><code>{{ n.prefix }}</code>{% if n.container %} · {{ n.children|length }} network{{ '' if n.children|length == 1 else 's' }}{% endif %}{% if n.comment %} · {{ n.comment }}{% endif %}</p>
+    {{ meter(100 * u[0] / u[1] if u[1] else 0, u[0] ~ ' of ' ~ u[1] ~ (' addresses in its networks' if n.container else ' addresses in use')) }}
+    <p class="small">{{ u[0] }} of {{ u[1] }} {{ 'addresses in networks' if n.container else 'in use' }}</p>
+    {% if n.container %}<ul class="plain small">{% for c in n.children %}<li><a href="/ipam/networks/{{ c.id }}">{{ c.label }}</a>{% if c.name %} <span class="muted">{{ c.prefix }}</span>{% endif %}</li>{% endfor %}</ul>{% endif %}
+  </section>
+  {% endfor %}
+</div>
+{% elif not user.is_admin %}
+<p class="muted">No networks yet.</p>
+{% endif %}
+{% if user.is_admin %}
+<section class="card form-card spaced">
+  <h2>Add a network</h2>
+  <form method="post" action="/ipam/networks" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <div class="row">
+      <label>Network <input name="prefix" value="{{ form.prefix or '' }}" placeholder="192.168.10.0/24" required{% if form_errors.prefix %} aria-invalid="true"{% endif %}>{% if form_errors.prefix %}<span class="error-text small">{{ form_errors.prefix }}</span>{% endif %}</label>
+      <label>Name <input name="name" value="{{ form.name or '' }}" placeholder="IoT, Home (a site)"></label>
+    </div>
+    <label>Comment <input name="comment" value="{{ form.comment or '' }}"></label>
+    {% call action_bar(note='A /16 holding /24s you add becomes their container.') %}<button type="submit">Add network</button>{% endcall %}
+  </form>
+</section>
+{% endif %}
+{% endblock %}

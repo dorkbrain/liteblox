@@ -1,0 +1,89 @@
+{# Leases and reservations merged (leases.addresses()); import "with context" for user, request and csrf_token. #}
+{% macro addresses_table(rows, subnet, back) -%}
+<div class="table-wrap"><table class="addresses">
+  <thead><tr>{% for key, label in [('ip', 'IP'), ('mac', 'MAC'), ('name', 'Name'), ('state', 'State'), ('lease', 'Lease')] %}<th{% if key == 'ip' %} aria-sort="ascending"{% endif %}><button type="button" class="sort" data-sort="{{ key }}" title="Sort by {{ label if key in ('ip', 'mac') else label|lower }}; click again to reverse">{{ label }}</button></th>{% endfor %}{% if user.is_admin %}<th></th>{% endif %}</tr></thead>
+  <tbody>{% for a in rows %}{% set l = a.lease %}{% set r = a.reservation %}
+  <tr data-search="{{ (a.ip ~ ' ' ~ a.mac ~ ' ' ~ a.hostname ~ ' ' ~ a.label ~ ' ' ~ (r.comment if r else ''))|lower }}"
+      data-order="{{ loop.index0 }}" data-mac="{{ a.mac|lower }}" data-name="{{ a.hostname|lower }}" data-state="{{ a.label }}"
+      data-lease="{{ l.expires_in if l and l.state == 'active' else '' }}">
+    <td>{% if a.ip %}<code>{{ a.ip }}</code>{% else %}<span class="muted" title="a name-only reservation: the client gets any pool address">any</span>{% endif %}</td>
+    <td>{% if a.mac %}<a href="/ipam/devices/{{ a.mac|urlencode }}"><code>{{ a.mac }}</code></a>{% set v = vendor(request, a.mac) %}{% if v %}<div class="muted small">{{ v }}</div>{% endif %}{% else %}<span class="muted"{% if a.state == 'declined' %} title="a client said this address was already in use; Kea holds it back for a while"{% endif %}>none</span>{% endif %}{% if a.state == 'taken' %}<div class="small muted">held by <code>{{ l.mac }}</code></div>{% endif %}</td>
+    <td>{% if a.zone %}<a href="/zones/{{ a.zone }}"><code>{{ a.hostname }}</code></a> <span class="muted small">in DNS</span>{% elif a.hostname %}<code>{{ a.hostname }}</code>{% else %}<span class="muted">none</span>{% endif %}
+      {%- if r and r.comment %}<div class="muted small">{{ r.comment }}</div>{% endif %}</td>
+    <td><span class="pill {{ a.pill }}">{{ a.label }}</span></td>
+    <td class="nowrap">{% if not l %}<span class="muted">–</span>{% elif l.state != 'active' %}<span class="muted" title="{{ l.expires|localtime }}">{{ l.state }}</span>{% elif l.expires_in > 0 %}<span title="{{ l.expires|localtime }}">ends in {{ l.expires_in|duration }}</span>{% else %}<span class="muted">expired</span>{% endif %}</td>
+    {% if user.is_admin %}<td class="actions">
+      {%- if r and subnet %}<a class="small" href="/dhcp/subnets/{{ subnet.id }}/reservations/{{ r.id }}">Edit reservation</a>
+      {%- elif subnet and l %}<a class="small" href="/dhcp/subnets/{{ subnet.id }}/reservations/new?mac={{ l.mac|urlencode }}&ip={{ l.ip|urlencode }}&hostname={{ l.hostname|urlencode }}" title="keep {{ a.ip }} for this client from now on">Reserve</a>{% endif %}
+      {%- if l and a.node %} <form method="post" action="/dhcp/leases/delete" class="inline" data-confirm="Delete the lease on {{ a.ip }}{% if a.zone %} and its DNS name {{ a.hostname }}{% endif %}? The client gets a new lease when it next asks." data-confirm-ok="Delete">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="ip" value="{{ a.ip }}"><input type="hidden" name="node_id" value="{{ a.node.id }}"><input type="hidden" name="back" value="{{ back }}">
+        <button type="submit" class="link danger small">Delete lease</button></form>{% endif %}</td>{% endif %}
+  </tr>{% endfor %}</tbody>
+</table></div>
+{%- endmacro %}
+
+{# The heading's counts: "35 active · 1 declined · 2 reservations" (leases.tally). #}
+{% macro counts(tally) -%}
+{% for n, label in tally %}{{ n }} {{ label }}{% if not loop.last %} · {% endif %}{% endfor %}
+{%- endmacro %}
+
+{# Click-to-sort for every addresses table on the page, each on its own; IP order (the server's) by default. #}
+{% macro sorting() -%}
+<script>
+  (function () {
+    const storeKey = 'liteblox-sort-addresses';
+    const collator = new Intl.Collator(undefined, {numeric: true, sensitivity: 'base'});
+    let sort = {key: 'ip', dir: 1};
+    try { sort = JSON.parse(sessionStorage.getItem(storeKey)) || sort; } catch (e) {}
+    const value = {
+      ip: tr => Number(tr.dataset.order),           // the rows come in numeric IP order
+      lease: tr => tr.dataset.lease === '' ? Infinity : Number(tr.dataset.lease),
+      mac: tr => tr.dataset.mac, name: tr => tr.dataset.name, state: tr => tr.dataset.state,
+    };
+    function compare(key, dir) {
+      return function (a, b) {
+        const x = value[key](a), y = value[key](b);
+        // no name, no MAC or no lease goes last either way
+        if ((x === '' || x === Infinity) !== (y === '' || y === Infinity)) return x === '' || x === Infinity ? 1 : -1;
+        const c = typeof x === 'number' ? (x === y ? 0 : x < y ? -1 : 1) : collator.compare(x, y);
+        return c * dir || Number(a.dataset.order) - Number(b.dataset.order);
+      };
+    }
+    function apply(table) {
+      const body = table.tBodies[0];
+      const rows = Array.from(body.rows);
+      rows.sort(compare(value[sort.key] ? sort.key : 'ip', sort.dir < 0 ? -1 : 1));
+      rows.forEach(function (tr) { body.appendChild(tr); });
+      table.querySelectorAll('button.sort').forEach(function (b) {
+        b.closest('th').setAttribute('aria-sort', b.dataset.sort !== sort.key ? 'none' : sort.dir > 0 ? 'ascending' : 'descending');
+      });
+    }
+    const tables = document.querySelectorAll('table.addresses');
+    tables.forEach(function (table) {
+      table.tHead.addEventListener('click', function (e) {
+        const b = e.target.closest('button.sort');
+        if (!b) return;
+        sort = sort.key !== b.dataset.sort ? {key: b.dataset.sort, dir: 1} : {key: sort.key, dir: -sort.dir};
+        try { sessionStorage.setItem(storeKey, JSON.stringify(sort)); } catch (e) {}
+        tables.forEach(apply);
+      });
+      apply(table);
+    });
+  })();
+</script>
+{%- endmacro %}
+
+{% macro filter_box() -%}
+<input type="search" id="address-filter" placeholder="Filter by IP, MAC, name or state" aria-label="Filter addresses">
+<script>
+  (function () {     // filter rows as you type, like the zone grid
+    const box = document.getElementById('address-filter');
+    box.addEventListener('input', function () {
+      const q = box.value.trim().toLowerCase();
+      document.querySelectorAll('tr[data-search]').forEach(function (tr) {
+        tr.hidden = q !== '' && !tr.dataset.search.includes(q);
+      });
+    });
+  })();
+</script>
+{%- endmacro %}

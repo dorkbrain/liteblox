@@ -1,0 +1,51 @@
+{% extends 'base.html' %}
+{% block title %}Time · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+{% set tab = 'time' %}{% include 'partials/settings_tabs.html' %}
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if done %}<p class="note">{{ done }}</p>{% endif %}
+<section class="card">
+  <p class="muted">Where the nodes get their time. Every node set up for time sync runs <strong>chrony</strong> with these sources; LiteBlox writes its whole config. Accurate clocks matter here: signed zone transfers and updates (DHCP's included) fail when two clocks are 5 minutes apart, and a DHCP failover pair stops at about a minute. <a href="/help/ntp">How it works</a></p>
+  {% if nodes %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Node</th><th>Time</th></tr></thead>
+    <tbody>{% for n in nodes %}{% set st = states[n.id] %}
+      <tr><td><a href="/nodes/{{ n.id }}#time">{{ n.name }}</a></td>
+        <td class="small">{% if not st %}<span class="muted">not checked yet</span>
+          {% elif st.synced %}<span class="pill ready">synced</span> from <code>{{ st.reference }}</code>, stratum {{ st.stratum }}, offset {{ '%+.6f'|format(st.offset) }}s
+          {% else %}<span class="pill warn">no source</span> {{ st.reachable }} of {{ st.sources }} sources reachable{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <p class="notice">No node runs LiteBlox's time sync yet. On a node's page, <strong>Set up time sync</strong> installs chrony with these sources.</p>
+  {% endif %}
+</section>
+<section class="card form-card spaced">
+  <h2>Sources</h2>
+  <form method="post" action="/settings/time" id="time-form" class="stack"
+        data-confirm="Apply this to every time server? Each is backed up first, and rolled back if chrony doesn't come back up." data-confirm-ok="Apply">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    {% for e in errors %}<p class="error">{{ e }}</p>{% endfor %}
+    <label>One per line: <code>pool NAME</code> (a name with several servers) or <code>server ADDRESS</code>
+      <textarea name="sources" rows="6" spellcheck="false" {% if not user.is_admin %}readonly{% endif %}>{{ text }}</textarea></label>
+    <p class="muted small">Options after the address: <code>prefer</code>, <code>nts</code> (authenticated time, if the server offers it), <code>minpoll N</code>/<code>maxpoll N</code>, <code>noiburst</code> (<code>iburst</code>, a quick first sync, is on by default).{% if not custom %} This is Debian's default pool, until you save your own.{% endif %}</p>
+    {% if nodes %}
+    <h2>Serving time</h2>
+    <p class="muted small">A node can answer other machines' time requests too: name the networks it serves (one per line, like <code>192.168.0.0/24</code>), and open UDP 123 on it. <strong>Keep serving when the sources are unreachable</strong> lets it go on answering from its own clock (with two such nodes they agree among themselves), instead of going quiet. <a href="/help/ntp#serving-time">More</a></p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Node</th><th>Serves time</th><th>To networks</th><th>Keep serving</th></tr></thead>
+      <tbody>{% for n in nodes %}{% set v = serving[n.id] %}
+        <tr><td>{{ n.name }}</td>
+          <td><input type="checkbox" name="serve_{{ n.id }}" value="1" aria-label="{{ n.name }} serves time" {% if v.serve %}checked{% endif %} {% if not user.is_admin %}disabled{% endif %}></td>
+          <td><textarea name="allow_{{ n.id }}" rows="2" spellcheck="false" aria-label="Networks {{ n.name }} serves" placeholder="192.168.0.0/24" {% if not user.is_admin %}readonly{% endif %}>{{ v.allow }}</textarea></td>
+          <td><input type="checkbox" name="local_{{ n.id }}" value="1" aria-label="{{ n.name }} keeps serving" {% if v.local %}checked{% endif %} {% if not user.is_admin %}disabled{% endif %}></td></tr>
+      {% endfor %}</tbody>
+    </table></div>
+    {% endif %}
+    <div id="time-review"></div>
+    <div class="inline-actions"><button type="button" class="secondary" hx-post="/settings/time/preview" hx-include="#time-form"
+      hx-target="#time-review" hx-swap="innerHTML">Review</button></div>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+{% block title %}Backup #{{ backup.id }} · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="heading">
+  <h1><a href="/nodes/{{ node.id }}/backups">{{ node.name }}</a> · {{ backup.created_at|localtime }}</h1>
+  {% if user.is_admin and backup.file %}<a class="button" href="/backups/{{ backup.id }}/download">Download</a>{% endif %}
+</div>
+<section class="card">
+  <dl class="facts">
+    <dt>Kind</dt><dd>{{ backup.kind }}{% if backup.reason %} <span class="muted">({{ backup.reason }})</span>{% endif %}</dd>
+    <dt>Status</dt><dd><span class="pill {{ backup.status }}">{{ backup.status }}</span>{% if backup.error %} <span class="error-text">{{ backup.error }}</span>{% endif %}</dd>
+    {% if backup.file %}<dt>File</dt><dd><code>{{ backup.file }}</code> ({{ '%.1f'|format((backup.size or 0) / 1024) }} KB)</dd>{% endif %}
+    {% if backup.username %}<dt>By</dt><dd>{{ backup.username }}</dd>{% endif %}
+    {% if manifest %}
+    <dt>BIND</dt><dd class="small">{{ manifest.named_version.split('\n')[0] }}</dd>
+    <dt>Keys</dt><dd>{{ 'included' if manifest.keys_included else 'excluded' }}</dd>
+    {% endif %}
+  </dl>
+  {% if backup.file %}<p class="muted small">Restore on a node: <code>tar zxf {{ backup.file.split('/')[-1] }} -C /</code>, then <code>systemctl restart named</code>.</p>{% endif %}
+</section>
+
+{% if changes %}
+<section class="card spaced">
+  <h2>Changes since {{ previous.created_at|localtime }}</h2>
+  {% if not (changes.added or changes.removed or changes.changed) %}<p class="muted">No files changed.</p>{% endif %}
+  <ul class="plain">
+    {% for p in changes.added %}<li><span class="pill ready">added</span> <code>{{ p }}</code></li>{% endfor %}
+    {% for p in changes.changed %}<li><span class="pill warn">changed</span> <code>{{ p }}</code></li>{% endfor %}
+    {% for p in changes.removed %}<li><span class="pill error">removed</span> <code>{{ p }}</code></li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if manifest %}
+<section class="card spaced">
+  <h2>{{ manifest.files|length }} files</h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Path</th><th>Mode</th><th>Size</th></tr></thead>
+    <tbody>
+    {% for path, f in manifest.files|dictsort %}
+    <tr>
+      <td>{% if user.is_admin %}<a href="/backups/{{ backup.id }}/view?path={{ path|urlencode }}"><code>{{ path }}</code></a>{% else %}<code>{{ path }}</code>{% endif %}</td>
+      <td class="small">{{ f.mode }}</td><td class="small">{{ f.size }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if manifest.skipped %}
+  <h2 class="spaced">Not included</h2>
+  <ul class="plain">{% for p, why in manifest.skipped|dictsort %}<li><code>{{ p }}</code> <span class="muted small">{{ why }}</span></li>{% endfor %}</ul>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

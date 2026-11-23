@@ -1,0 +1,74 @@
+{% extends 'base.html' %}
+{% from 'partials/ui.html' import empty %}
+{% from 'partials/node_pill.html' import node_pill, flags %}
+{% block title %}Nodes · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="heading">
+  <h1>Nodes</h1>
+  <div class="inline-actions"><a class="button secondary" href="/jobs">Jobs</a>{% if user.is_admin %} <a class="button" href="/nodes/new">Add node</a>{% endif %}</div>
+</div>
+{% if user.is_admin and can_upgrade %}
+<form method="post" action="/nodes/upgrade-agents" class="notice inline-actions" data-confirm="Upgrade the agent on {{ can_upgrade|map(attribute='name')|join(', ') }}, one node at a time? Each agent restarts for a few seconds (DNS, DHCP and time keep running); one that doesn't start goes back to its old agent." data-confirm-ok="Upgrade agents">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  <span><span class="pill warn">upgrade</span> This LiteBlox ships a newer agent for {{ can_upgrade|map(attribute='name')|join(', ') }}.</span>
+  <button type="submit" class="small">Upgrade {{ 'agent' if can_upgrade|length == 1 else 'all ' ~ can_upgrade|length ~ ' agents' }}</button>
+</form>
+{% endif %}
+{% if readopt and user.is_admin %}
+<p class="notice" id="readopt"><span class="pill warn">another LiteBlox</span> {{ readopt|map(attribute='name')|join(', ') }} {{ 'runs' if readopt|length == 1 else 'run' }} a config that a LiteBlox generated (BIND, Kea or chrony), but not this one. If this LiteBlox replaces one whose data was lost, <a href="/nodes/readopt">re-adopt them</a>: LiteBlox rebuilds its data from them.</p>
+{% endif %}
+{% if nodes %}
+<div class="card table-wrap">
+<table>
+  <thead><tr><th>Node</th><th>Host</th><th>Role</th><th>Status</th><th>Agent</th><th>BIND</th><th>Last seen</th></tr></thead>
+  <tbody>
+  {% for n in nodes %}
+  <tr>
+    <td><a href="/nodes/{{ n.id }}">{{ n.name }}</a></td>
+    <td><code>{{ n.host }}</code></td>
+    <td>{% if not n.bind %}<span class="pill">{{ kinds[n.id] }}</span>{% elif n.role %}<span class="pill">{{ n.role }}</span>{% elif n.managed %}<span class="muted small">primary copy</span>{% else %}<span class="muted small">not taken over</span>{% endif %}</td>
+    <td>{{ node_pill(n) }}{% if stale[n.id] %} <span class="pill error" title="no successful backup in the last 48 hours">backup stale</span>{% endif %}{{ flags(n, reports.get(n.id, 0)) }}</td>
+    <td>{{ n.agent_version or '–' }}{% if upgrade[n.id] %} <span class="pill warn">upgrade</span>{% endif %}</td>
+    <td class="muted small">{{ (n.named_version or '–').split(' (')[0] if n.bind else 'none' }}</td>
+    <td class="muted small">{{ n.last_seen_at|reltime or '–' }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if differ %}<p class="notice"><span class="pill warn">settings differ</span> The taken-over nodes don't all have the same server settings:
+  {% for g in differ %}{{ g|join(', ') }}{% if not loop.last %} · {% endif %}{% endfor %}. Open a node's <strong>Server settings</strong> to copy one onto the others.</p>{% endif %}
+{% if any_bind %}<section class="card spaced" id="topology">
+  <h2>Primary and secondaries</h2>
+  {% set primary = topology.primary %}
+  {% if primary %}
+  <p><strong><a href="/nodes/{{ primary.id }}">{{ primary.name }}</a></strong> is the primary: LiteBlox publishes zones there, and the other nodes transfer them from it (NOTIFY, then IXFR, signed with LiteBlox's own key).</p>
+  {% for n in topology.pending %}<p class="notice">{{ n.name }} isn't a secondary of {{ primary.name }} yet{% if n.role is none %}: its zones are still primary copies{% endif %}. Make {{ primary.name }} the primary again to convert it.</p>{% endfor %}
+  {% else %}
+  <p class="muted">No primary is picked yet, so every node holds its own primary copy of the zones it serves and LiteBlox publishes to all of them (dual-master). Pick a primary to have the others transfer from it; dynamic updates need that.</p>
+  {% endif %}
+  {% if user.is_admin %}
+  {% set candidates = nodes|selectattr('managed')|list %}
+  {% if candidates %}
+  <div class="inline-actions">{% for n in candidates %}
+    {% if primary and primary.id != n.id and n.role == 'secondary' and not n.pending %}
+    <form method="post" action="/nodes/{{ n.id }}/primary" data-confirm="Promote {{ n.name }} to primary in place of {{ primary.name }}? Static zones start from LiteBlox's published copies, dynamic zones from the newest copy a reachable node has. {{ primary.name }} becomes its secondary (if it's down, as soon as it answers again), and records only {{ primary.name }} had are kept in a report." data-confirm-ok="Promote {{ n.name }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <button type="submit" class="secondary">Promote {{ n.name }}{% if not addresses[n.id] %} (needs a DNS address){% endif %}</button>
+    </form>
+    {% else %}
+    <form method="post" action="/nodes/{{ n.id }}/primary" data-confirm="Make {{ n.name }} the primary of every zone? The other taken-over nodes become its secondaries. Each node is backed up first, and a node that doesn't serve as expected is rolled back." data-confirm-ok="Make {{ n.name }} the primary">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <button type="submit" class="{{ 'secondary' if primary and primary.id == n.id and not topology.pending else '' }}">Make {{ n.name }} the primary{% if not addresses[n.id] %} (needs a DNS address){% endif %}</button>
+    </form>
+    {% endif %}{% endfor %}
+  </div>
+  {% else %}<p class="muted small">Take over a node first (its page → Take over).</p>{% endif %}
+  {% endif %}
+</section>{% endif %}
+{% else %}
+<section class="card">{{ empty('No nodes yet. Add your servers: BIND, DHCP and Time run on nodes, and IPAM reads and sweeps networks through them (a scanner node runs just the agent).', '/nodes/new' if user.is_admin, 'Add node') }}
+  <p class="muted small">First get each server ready with <a href="/help/node-prep">Preparing a node</a>, or follow the <a href="/help/quick-start">Quick start</a>.</p></section>
+{% endif %}
+{% endblock %}

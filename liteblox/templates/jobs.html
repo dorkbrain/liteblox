@@ -1,0 +1,45 @@
+{% extends 'base.html' %}
+{% block title %}Jobs · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="heading"><h1>Jobs</h1></div>
+<section class="card">
+  <form method="get" action="/jobs" class="inline-actions audit-filters">
+    <select name="kind" aria-label="Kind">
+      <option value="">every kind</option>
+      {% for k in kinds %}<option value="{{ k }}"{% if k == filters.kind %} selected{% endif %}>{{ k|job_label }}</option>{% endfor %}
+    </select>
+    <select name="status" aria-label="Status">
+      <option value="">any status</option>
+      {% for s in ('running', 'ok', 'failed') %}<option{% if s == filters.status %} selected{% endif %}>{{ s }}</option>{% endfor %}
+    </select>
+    <select name="node" aria-label="Node">
+      <option value="">any node</option>
+      {% for n in nodes %}<option{% if n == filters.node %} selected{% endif %}>{{ n }}</option>{% endfor %}
+    </select>
+    <button type="submit" class="secondary">Filter</button>
+    {% if filters.kind or filters.status or filters.node %}<a class="small" href="/jobs">Clear</a>{% endif %}
+  </form>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Job</th><th>On</th><th>Status</th><th>Started</th><th>Took</th><th>By</th></tr></thead>
+    <tbody>
+    {% for j in rows %}
+    <tr>
+      <td><a href="/jobs/{{ j.id }}">#{{ j.id }} {{ j.kind|job_label }}</a></td>
+      <td>{% if j.node %}<a href="/nodes/{{ j.node_id }}">{{ j.node }}</a>{% elif j.zone %}<a href="/zones/{{ j.zone }}"><code>{{ j.zone }}</code></a>{% else %}<span class="muted">–</span>{% endif %}</td>
+      <td class="nowrap"><span class="pill {{ j.status }}">{{ j.status }}</span>{% if j.warned and j.status == 'ok' %} <span class="pill warn">warnings</span>{% endif %}</td>
+      <td class="small nowrap">{{ j.created_at|reltime }}</td>
+      <td class="small nowrap">{{ j.took }}</td>
+      <td class="small">{{ j.username or '–' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="muted">No jobs{% if filters.kind or filters.status or filters.node %} that match{% endif %}.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if more %}<p><a class="button secondary" href="/jobs?kind={{ filters.kind|urlencode }}&status={{ filters.status|urlencode }}&node={{ filters.node|urlencode }}&before={{ rows[-1].id }}">Older</a></p>{% endif %}
+  <p class="muted small">Long changes (setup, takeover, publishing, config changes, promotion) run as jobs; each keeps its log. Command-line jobs show as <code>cli</code>, and the health check's own as <code>liteblox</code>.</p>
+</section>
+{% endblock %}

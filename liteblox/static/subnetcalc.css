@@ -1,0 +1,130 @@
+/* The subnet calculator (Tools → Subnet Calculator).
+   An altered version of David C A Croft's Visual Subnet Calculator (https://github.com/davidc/subnets),
+   Copyright (c) 2002, 2011, 2018, 2019 David C A Croft, under the license in subnetcalc-LICENSE.txt.
+   Reworked for LiteBlox; this is not the original software.
+   Its styles, scoped under .subnetcalc and mapped onto app.css's tokens, so it follows the light/dark theme. No web fonts. */
+.subnetcalc {
+  --sc-bg2: var(--surface);
+  --sc-bg3: color-mix(in srgb, var(--surface) 94%, var(--text));
+  --sc-hover: color-mix(in srgb, var(--surface) 86%, var(--text));
+  --sc-accent-soft: color-mix(in srgb, var(--accent) 10%, transparent);
+  --sc-accent-line: color-mix(in srgb, var(--accent) 22%, transparent);
+  --sc-ok-soft: color-mix(in srgb, var(--ok) 10%, transparent);
+  --sc-ok-line: color-mix(in srgb, var(--ok) 25%, transparent);
+  /* the outer mask badges (/0–/15): light blues with dark text, the source's navies in the dark theme */
+  --sc-m0: #c9d7ea; --sc-m8: #b4c8e2; --sc-m12: #9fb8d9; --sc-m-text: #1c2330;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .subnetcalc { --sc-m0: #1e3a5f; --sc-m8: #2d4a6f; --sc-m12: #3b5a7f; --sc-m-text: #fff; }
+}
+:root[data-theme="dark"] .subnetcalc { --sc-m0: #1e3a5f; --sc-m8: #2d4a6f; --sc-m12: #3b5a7f; --sc-m-text: #fff; }
+
+.subnetcalc .subtitle { color: var(--muted); font-size: 14px; margin: 4px 0 0; }
+
+/* Controls */
+.subnetcalc .controls { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-end; margin-bottom: 1.25rem; }
+.subnetcalc .input-group { display: flex; flex-direction: column; gap: 0.5rem; }
+.subnetcalc .input-group.buttons { flex-direction: row; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end; }
+.subnetcalc .input-group label { display: block; font-size: 0.75rem; font-weight: 500; color: var(--muted);
+                                 text-transform: uppercase; letter-spacing: 0.05em; }
+.subnetcalc .network-input { display: flex; align-items: center; background: var(--sc-bg2); border: 1px solid var(--border);
+                             border-radius: 8px; overflow: hidden; transition: border-color 0.2s, box-shadow 0.2s; }
+.subnetcalc .network-input:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--sc-accent-line); }
+.subnetcalc .network-input input { background: transparent; border: none; border-radius: 0; color: var(--text);
+                                   font-family: var(--mono); font-size: 1rem; padding: 0.7rem 1rem; outline: none; min-width: 0; }
+.subnetcalc .network-input input:focus { outline: none; }
+.subnetcalc .network-input input::placeholder { color: var(--muted); opacity: .7; }
+.subnetcalc .network-input input[name="network"] { width: 177px; }
+.subnetcalc .network-input input[name="netbits"] { width: 50px; text-align: center; }
+.subnetcalc .network-input input[name="exclusions"] { width: 300px; }
+.subnetcalc .network-input .separator { color: var(--muted); font-family: var(--mono); font-size: 1.25rem; padding: 0 0.25rem; }
+
+/* Buttons */
+.subnetcalc .btn { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.7rem 1.15rem; font-size: 0.875rem;
+                   font-weight: 500; border-radius: 8px; border: none; cursor: pointer; transition: all 0.2s; }
+.subnetcalc .btn-primary { background: var(--accent); color: var(--accent-text); }
+.subnetcalc .btn-primary:hover { filter: brightness(.92); transform: translateY(-1px); }
+.subnetcalc .btn-secondary { background: var(--sc-bg3); color: var(--text); border: 1px solid var(--border); }
+.subnetcalc .btn-secondary:hover { background: var(--sc-hover); }
+.subnetcalc .btn svg { width: 16px; height: 16px; }
+
+#calc-message { margin: 0 0 1rem; }
+#copy-fallback { margin: 0 0 1rem; }
+
+/* Info Bar */
+.subnetcalc .info-bar { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1rem; background: var(--sc-accent-soft);
+                        border: 1px solid var(--sc-accent-line); border-radius: 8px; margin-bottom: 1.25rem; font-size: 0.85rem;
+                        color: var(--muted); }
+.subnetcalc .info-bar strong { color: var(--text); }
+.subnetcalc .info-bar svg { width: 18px; height: 18px; color: var(--accent); flex-shrink: 0; }
+.subnetcalc .info-bar a { color: var(--accent); text-decoration: none; }
+.subnetcalc .info-bar a:hover { text-decoration: underline; }
+
+/* Table: it scrolls inside its box when the Join columns get wide */
+.subnetcalc .table-container { overflow-x: auto; border-radius: 12px; border: 1px solid var(--border); background: var(--sc-bg2); }
+.subnetcalc table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+.subnetcalc thead { background: var(--sc-bg3); }
+.subnetcalc th { padding: 0.9rem 1rem; text-align: left; font-weight: 600; font-size: 0.75rem; text-transform: uppercase;
+                 letter-spacing: 0.05em; color: var(--muted); border-bottom: 1px solid var(--border); white-space: nowrap; }
+.subnetcalc th.clickable { cursor: pointer; user-select: none; transition: color 0.2s; }
+.subnetcalc th.clickable:hover, .subnetcalc th.clickable:focus-visible { color: var(--accent); }
+.subnetcalc th.clickable svg { width: 14px; height: 14px; vertical-align: -2px; margin-left: 0.375rem; opacity: 0.6; }
+.subnetcalc tbody tr { transition: background 0.15s; animation: sc-fade-in 0.2s ease-out; }
+.subnetcalc tbody tr:hover { background: color-mix(in srgb, var(--text) 3%, transparent); }
+.subnetcalc td { padding: 0.8rem 1rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.subnetcalc tbody tr:last-child td { border-bottom: none; }
+.subnetcalc .cell-mono { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
+.subnetcalc .cell-subnet { font-weight: 500; color: var(--accent); }
+.subnetcalc .cell-subnet-excluded { font-weight: 500; color: var(--error-text); text-decoration: line-through; }
+.subnetcalc .cell-hosts { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* Action Links */
+.subnetcalc .action-link { display: inline-flex; align-items: center; gap: 0.375rem; padding: 0.375rem 0.625rem; font-size: 0.75rem;
+                           font-weight: 500; color: var(--ok); background: var(--sc-ok-soft); border: 1px solid var(--sc-ok-line);
+                           border-radius: 5px; text-decoration: none; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+.subnetcalc .action-link:hover { background: color-mix(in srgb, var(--ok) 20%, transparent); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+.subnetcalc .action-link svg { width: 12px; height: 12px; }
+.subnetcalc .action-disabled, .subnetcalc .action-disabled:hover { color: var(--muted); background: transparent; border-color: var(--border); cursor: not-allowed; }
+
+/* Mask Spans (Join column) */
+/* .mask-cell, not td.mask-cell: the .mask-N rules below must win on colour */
+.subnetcalc .mask-cell { text-align: center; padding: 0.5rem; font-family: var(--mono); font-size: 0.7rem; font-weight: 600;
+                         color: #fff; min-width: 36px; position: relative; border-bottom-color: color-mix(in srgb, var(--sc-bg2) 40%, transparent); }
+.subnetcalc .mask-cell.joinable { cursor: pointer; transition: all 0.2s; }
+.subnetcalc .mask-cell.joinable:hover { filter: brightness(1.15); }
+
+/* Mask colors: the source's hues; dark text where white would be hard to read */
+.subnetcalc .mask-0, .subnetcalc .mask-1, .subnetcalc .mask-2, .subnetcalc .mask-3, .subnetcalc .mask-4, .subnetcalc .mask-5,
+.subnetcalc .mask-6, .subnetcalc .mask-7 { background: var(--sc-m0); color: var(--sc-m-text); }
+.subnetcalc .mask-8, .subnetcalc .mask-9, .subnetcalc .mask-10, .subnetcalc .mask-11 { background: var(--sc-m8); color: var(--sc-m-text); }
+.subnetcalc .mask-12, .subnetcalc .mask-13, .subnetcalc .mask-14, .subnetcalc .mask-15 { background: var(--sc-m12); color: var(--sc-m-text); }
+.subnetcalc .mask-16 { background: #3b82f6; }
+.subnetcalc .mask-17 { background: #8b5cf6; }
+.subnetcalc .mask-18 { background: #ec4899; }
+.subnetcalc .mask-19 { background: #f43f5e; }
+.subnetcalc .mask-20 { background: #f97316; }
+.subnetcalc .mask-21 { background: #eab308; color: #1c2330; }
+.subnetcalc .mask-22 { background: #22c55e; color: #1c2330; }
+.subnetcalc .mask-23 { background: #14b8a6; }
+.subnetcalc .mask-24 { background: #06b6d4; }
+.subnetcalc .mask-25 { background: #6366f1; }
+.subnetcalc .mask-26 { background: #a855f7; }
+.subnetcalc .mask-27 { background: #d946ef; }
+.subnetcalc .mask-28 { background: #f472b6; }
+.subnetcalc .mask-29 { background: #fb7185; }
+.subnetcalc .mask-30 { background: #fb923c; }
+.subnetcalc .mask-31 { background: #facc15; color: #1c2330; }
+.subnetcalc .mask-32 { background: #4ade80; color: #1c2330; }
+
+@keyframes sc-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 768px) {
+  .subnetcalc .controls { flex-direction: column; align-items: stretch; gap: 1rem; }
+  .subnetcalc .network-input input[name="network"] { width: auto; flex: 1; }
+  .subnetcalc .network-input input[name="exclusions"] { width: 100%; }
+  .subnetcalc th, .subnetcalc td { padding: 0.6rem 0.5rem; }
+  .subnetcalc .cell-mono { font-size: 0.7rem; }
+}

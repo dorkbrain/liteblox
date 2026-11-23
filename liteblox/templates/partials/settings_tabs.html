@@ -1,0 +1,10 @@
+{%- set on = modules_on(request) -%}
+<div class="heading"><h1>Settings</h1></div>
+<nav class="tabs">
+  {% if on.dns %}<a href="/settings/acls" {% if tab == 'acls' %}aria-current="page"{% endif %}>ACLs</a>
+  <a href="/settings/keys" {% if tab == 'keys' %}aria-current="page"{% endif %}>TSIG keys</a>{% endif %}
+  {% if on.ntp %}<a href="/settings/time" {% if tab == 'time' %}aria-current="page"{% endif %}>Time</a>{% endif %}
+  {% if on.ipam %}<a href="/settings/ipam" {% if tab == 'ipam' %}aria-current="page"{% endif %}>IPAM</a>{% endif %}
+  <a href="/settings/modules" {% if tab == 'modules' %}aria-current="page"{% endif %}>Modules</a>
+  <a href="/settings/https" {% if tab == 'https' %}aria-current="page"{% endif %}>HTTPS</a>
+</nav>

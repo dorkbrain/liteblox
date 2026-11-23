@@ -1,0 +1,14 @@
+<div class="heading">
+  <h1><a href="/zones">Zones</a> · <code>{{ zone_name }}</code></h1>
+</div>
+<nav class="tabs">
+  {% if forwarding %}
+  <a href="/zones/{{ zone_name }}/settings" aria-current="page">Forwarding</a>
+  {% else %}
+  <a href="/zones/{{ zone_name }}" {% if tab == 'records' %}aria-current="page"{% endif %}>Records</a>
+  <a href="/zones/{{ zone_name }}/raw" {% if tab == 'raw' %}aria-current="page"{% endif %}>Raw</a>
+  {% if not request.state.zone_dynamic %}<a href="/zones/{{ zone_name }}/review" {% if tab == 'review' %}aria-current="page"{% endif %}>Review{% if is_draft %} <span class="pill warn">draft</span>{% endif %}</a>{% endif %}
+  <a href="/zones/{{ zone_name }}/history" {% if tab == 'history' %}aria-current="page"{% endif %}>History</a>
+  <a href="/zones/{{ zone_name }}/settings" {% if tab == 'settings' %}aria-current="page"{% endif %}>Settings</a>
+  {% endif %}
+</nav>

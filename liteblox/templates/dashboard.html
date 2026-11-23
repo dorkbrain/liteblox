@@ -1,0 +1,8 @@
+{% extends 'base.html' %}
+{% block title %}Dashboard · LiteBlox{% endblock %}
+{% block content %}
+{# the health check refreshes the DB every minute; the body follows it (not while the tab is hidden) #}
+<div id="dashboard" hx-get="/dashboard/body" hx-trigger="every 60s [!document.hidden]" hx-swap="innerHTML">
+{% include 'partials/dashboard_body.html' %}
+</div>
+{% endblock %}

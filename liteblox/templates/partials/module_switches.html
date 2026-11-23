@@ -1,0 +1,11 @@
+{#- The four module switches: Settings → Modules and the first-run card on the Dashboard. -#}
+{% for n in names %}
+<div class="setting">
+  <span class="setting-name"><label class="check"><input type="checkbox" name="{{ n }}" value="on"{% if wanted[n] %} checked{% endif %}><span><strong>{{ labels[n] }}</strong></span></label></span>
+  <div class="setting-control">
+    <span class="small">{{ about[n] }}</span>
+    {% if errors[n] %}<span class="error-text small">{{ errors[n] }}</span>
+    {% elif in_use[n] and wanted[n] %}<span class="muted small">In use: {{ in_use[n] }}.</span>{% endif %}
+  </div>
+</div>
+{% endfor %}

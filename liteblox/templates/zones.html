@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+{% from 'partials/ui.html' import empty, filters %}
+{% block title %}Zones · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="heading"><h1>Zones</h1>
+  <div class="inline-actions">{% if zones %}<a class="small" href="/zones/records.csv{% if kind %}?kind={{ kind }}{% endif %}" title="Download the records of {{ 'these zones' if kind else 'every zone' }} as CSV (zone, name, ttl, type, value, comment)">Export CSV</a>{% endif %}
+  {% if user.is_admin %}<a class="button" href="/zones/new">Add zone</a>{% endif %}</div></div>
+{% if any %}
+{{ filters('/zones', 'kind', zone_filters, kind, total) }}
+{% endif %}
+{% if zones %}
+<div class="card table-wrap">
+<table>
+  <thead><tr><th>Zone</th><th>Kind</th><th>Published serial</th><th>Serving (per node)</th></tr></thead>
+  <tbody>
+  {% for z in zones %}
+  <tr>
+    <td><a href="/zones/{{ z.row.name }}"><code>{{ z.row.name }}</code></a></td>
+    <td class="nowrap">{% if 'forwarding' in z.kinds %}<span class="pill">forwarding</span> <span class="muted small">→ {{ z.row.forwarders.split('\n')[0] }}{% if '\n' in z.row.forwarders %}, …{% endif %}</span>
+      {%- else %}{% if 'reverse' in z.kinds %}<span class="pill">reverse</span> {% endif %}{% if 'dynamic' in z.kinds %}<span class="pill">dynamic</span> {% endif %}{% endif %}
+      {%- if z.is_draft %}<a class="pill warn" href="/zones/{{ z.row.name }}/review">draft</a>{% endif %}</td>
+    <td>{{ z.serial or '–' }}</td>
+    {% if z.row.kind == 'forwarding' %}<td class="small">{% for n in z.nodes %}{{ n }}{% if not loop.last %}, {% endif %}{% endfor %} <span class="muted">· forwards</span></td>
+    {% else %}<td id="serials-{{ z.row.id }}" class="small" data-published="{{ z.serial or '' }}">{% for n in z.nodes %}{{ n }}{% if not loop.last %}, {% endif %}{% else %}<span class="muted">no nodes</span>{% endfor %} <span class="muted">· checking…</span></td>{% endif %}
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<div hx-get="/zones/serials{% if kind %}?ids={% for z in zones %}{{ z.row.id }}{{ ',' if not loop.last }}{% endfor %}{% endif %}" hx-trigger="load" hx-swap="none"></div>
+{% elif any %}
+<section class="card">{{ empty('No zones match this filter.', '/zones', 'Show all zones') }}</section>
+{% else %}
+<section class="card">{{ empty('No zones yet. Add a zone, or take over a node to import its zones.', '/zones/new' if user.is_admin, 'Add zone') }}</section>
+{% endif %}
+{% endblock %}

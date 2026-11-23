@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+{% block title %}{{ title or 'Help' }} · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="help-layout">
+  <nav class="help-nav card" aria-label="Help pages">
+    <h2><a href="/help">Help</a></h2>
+    <details class="help-fold" open><summary class="small muted">All pages</summary>
+    <ul class="plain">
+      {% for s, t in pages %}<li><a href="/help/{{ s }}" {% if s == slug %}aria-current="page"{% endif %}>{{ t }}</a></li>{% endfor %}
+    </ul>
+    {% if others %}<p class="small muted spaced">Not in use here (Settings → Modules)</p>
+    <ul class="plain small">{% for s, t in others %}<li><a href="/help/{{ s }}" {% if s == slug %}aria-current="page"{% endif %}>{{ t }}</a></li>{% endfor %}</ul>{% endif %}
+    </details>
+    {% if toc %}
+    <details class="help-fold spaced" open><summary><h2>On this page</h2></summary>
+    <ul class="plain toc">{% for item in toc %}<li><a href="#{{ item.id }}">{{ item.name }}</a></li>{% endfor %}</ul></details>
+    {% endif %}
+    {% if not user %}<p class="small spaced"><a href="/login">Log in</a></p>{% endif %}
+  </nav>
+  {# on a phone the nav sits above the article: fold it so the page starts on screen #}
+  <script>if (matchMedia('(max-width: 760px)').matches) document.querySelectorAll('.help-fold').forEach(function (d) { d.open = false; });</script>
+  <article class="doc card">
+    {% if body %}{{ body|safe }}
+    {% else %}
+    <h1>Help</h1>
+    <ul>{% for s, t in pages %}<li><a href="/help/{{ s }}">{{ t }}</a></li>{% endfor %}</ul>
+    {% if others %}<p class="muted">About modules this LiteBlox doesn't run:</p>
+    <ul>{% for s, t in others %}<li><a href="/help/{{ s }}">{{ t }}</a></li>{% endfor %}</ul>{% endif %}
+    {% endif %}
+  </article>
+</div>
+{% endblock %}

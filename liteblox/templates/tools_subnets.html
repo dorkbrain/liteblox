@@ -1,0 +1,26 @@
+{% extends 'base.html' %}
+{% block title %}Subnet reference · LiteBlox{% endblock %}
+{% block content %}
+<div class="heading"><h1>Subnet reference</h1></div>
+<p class="muted">Every IPv4 prefix from /0 to /32. <strong>Next Net</strong> is where the next network of that size starts, written over an address <code>a.b.c.d</code> on its boundary: for a /26 at <code>192.168.1.64</code> it's <code>a.b.c.d+64</code>, so <code>192.168.1.128</code>.</p>
+<section class="card subnet-card">
+  <div class="table-wrap">
+  <table class="subnet-ref">
+    <thead><tr><th>CIDR</th><th>Mask</th><th class="num">Usable hosts</th><th>Next Net</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr{% if r.common %} class="common"{% endif %}>
+      <td>/{{ r.prefix }}</td>
+      <td>{{ r.mask }}</td>
+      <td class="num">{{ '{:,}'.format(r.hosts) }}</td>
+      <td>{{ r.next }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+<p class="muted small">Usable hosts leaves out the network and broadcast addresses, except on a <strong>/31</strong>, where both
+addresses are usable on a point-to-point link (RFC 3021), and a <strong>/32</strong>, a single host. See
+<a href="/help/tools">Help → Tools</a>.</p>
+{% endblock %}

@@ -1,0 +1,7 @@
+{# One row of a settings page: the name (and BIND option) on the left, the control and help on the right. #}
+{% macro setting(name, option=None, help=None, id=None) -%}
+<div class="setting">
+  {% if id %}<label class="setting-name" for="{{ id }}">{% else %}<div class="setting-name">{% endif %}{{ name }}{% if option %} <code>{{ option }}</code>{% endif %}{% if id %}</label>{% else %}</div>{% endif %}
+  <div class="setting-control">{{ caller() }}{% if help %}<p class="setting-help">{{ help|safe }}</p>{% endif %}</div>
+</div>
+{%- endmacro %}

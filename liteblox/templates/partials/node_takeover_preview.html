@@ -1,0 +1,61 @@
+{% from 'partials/ui.html' import action_bar %}
+<h2>Preview</h2>
+{% if error %}
+<p class="error">{{ error }}</p>
+{% else %}
+{% set plan = pv.plan %}
+{% if pv.blockers %}
+<div class="error" role="alert"><p><strong>{{ node.name }} can't be taken over as it is:</strong></p>
+  <ul>{% for b in pv.blockers %}<li>{{ b }}</li>{% endfor %}</ul></div>
+{% elif pv.diff %}
+<p class="error" role="alert">The generated config is not equivalent to the node's. Nothing will change.</p>
+<pre class="log">{{ pv.diff }}</pre>
+{% elif pv.diff == '' %}
+<p class="notice">✓ <code>named-checkconf -px</code> of the generated config matches the node's (after normalizing statement order, <code>master</code>/<code>primary</code> and the moved zone files).</p>
+{% endif %}
+
+<h3>Server options</h3>
+{% if fields %}<dl class="facts">{% for label, value in fields %}<dt><code>{{ label }}</code></dt><dd>{{ value }}</dd>{% endfor %}</dl>{% else %}<p class="muted">Only <code>directory</code>, which LiteBlox writes itself.</p>{% endif %}
+{% if plan.config.options.extra %}<p class="small">Kept as written (no field for these yet):</p><pre class="log">{{ plan.config.options.extra }}</pre>{% endif %}
+
+{% if plan.acls or plan.keys or plan.config.top_extra %}
+<h3>ACLs, keys and other statements</h3>
+<ul class="plain">
+  {% for a in plan.acls %}<li>ACL <code>{{ a.name }}</code>: {{ a.items|join(', ') }}</li>{% endfor %}
+  {% for k in plan.keys %}<li>key <code>{{ k.name }}</code> ({{ k.algorithm }}; its secret is stored in LiteBlox)</li>{% endfor %}
+</ul>
+{% if plan.config.top_extra %}<p class="small">Top-level statements kept as written:</p><pre class="log">{{ plan.config.top_extra }}</pre>{% endif %}
+{% endif %}
+
+<h3>Zones</h3>
+{% if plan.zones %}
+<table>
+  <thead><tr><th>Zone</th><th>In LiteBlox</th><th>File</th></tr></thead>
+  <tbody>{% for z in plan.zones %}<tr><td><code>{{ z.name }}</code></td><td>{% if z.row %}already{% else %}new, imported now{% endif %}</td>
+    <td class="small">{% if z.kind == 'forwarding' %}forwarding only → {{ z.settings.forwarders.replace('\n', ', ') or 'no forwarders' }}{% if z.settings.forward_mode %} ({{ z.settings.forward_mode }}){% endif %}
+      {% elif z.relocated %}<code>{{ z.old_file }}</code> → <code>{{ z.new_file }}</code>{% else %}<code>{{ z.new_file }}</code>{% endif %}
+      {% if z.dynamic %}<div><span class="pill ready">dynamic</span> {% for key, scope, owner, types in z.grants %}<code>grant {{ key }} {{ scope }}{% if owner %} {{ owner }}{% endif %} {{ types }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</div>{% endif %}</td></tr>{% endfor %}</tbody>
+</table>
+{% if plan.zones|selectattr('dynamic')|list %}
+<p class="small muted">A dynamic zone is held (<code>rndc freeze</code>) for the few seconds the takeover takes, so no update is lost; clients retry. Its update rules become key grants on the Keys page. LiteBlox reads and edits it once a primary is picked (Nodes → Make … the primary), which also gives LiteBlox's own key its grant.</p>
+{% endif %}
+{% else %}<p class="muted">No zones of its own.</p>{% endif %}
+
+<h3>Files</h3>
+<ul class="plain small">
+  {% for f in plan.config.distro_includes %}<li>keep <code>{{ f }}</code> (the package's own)</li>{% endfor %}
+  {% for f in plan.retire %}<li>retire <code>{{ f }}</code> into <code>/etc/bind/pre-liteblox/</code></li>{% endfor %}
+  {% for f in plan.left_in_place %}<li>no longer read: <code>{{ f }}</code> (left where it is)</li>{% endfor %}
+</ul>
+{% for n in pv.notes %}<p class="muted small">{{ n }}</p>{% endfor %}
+
+{% if pv.ready %}
+<form method="post" action="/nodes/{{ node.id }}/takeover" data-confirm-ok="Take over" data-confirm="Take over the BIND config on {{ node.name }}? It is backed up first and rolled back automatically if it stops serving as before.">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  <input type="hidden" name="current_sha" value="{{ pv.current_sha }}">
+  {% call action_bar('/nodes/' ~ node.id) %}<button type="submit">Take over {{ node.name }}</button>{% endcall %}
+</form>
+{% else %}
+<p><a class="button secondary" href="/nodes/{{ node.id }}">Back to {{ node.name }}</a></p>
+{% endif %}
+{% endif %}

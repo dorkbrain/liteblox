@@ -1,0 +1,33 @@
+{% extends 'ipam_base.html' %}
+{% from 'partials/ipam_map.html' import container_map, donut %}
+{% from 'partials/charts.html' import meter %}
+{% block title %}{{ network.label }} · IPAM · LiteBlox{% endblock %}
+{% block ipam %}
+<div class="heading">
+  <h1>{% for p in path %}<a href="/ipam/networks/{{ p.id }}">{{ p.label }}</a> · {% endfor %}{{ network.label }}{% if network.name %} <code class="muted">{{ network.prefix }}</code>{% endif %}</h1>
+  {% if user.is_admin %}<a class="button secondary" href="/ipam/networks/{{ network.id }}/settings">Settings</a>{% endif %}
+</div>
+<p class="page-intro muted small">{% if network.comment %}{{ network.comment }} · {% endif %}It holds {{ children|length }} network{{ '' if children|length == 1 else 's' }}: their addresses are on their own pages.</p>
+<div class="ipam-top">
+  <section class="card">
+    <h2>Overview <span class="muted small">one cell per /{{ [network.net.prefixlen + 8, 30]|min }}</span></h2>
+    {{ container_map(cells) }}
+    <div class="ipam-legend small"><span><i class="l-0"></i>not in a network</span><span><i class="l-4"></i>in a network (click to open it)</span></div>
+  </section>
+  <section class="card">
+    <h2>Utilization</h2>
+    {{ donut(segments, [('assigned', 'In networks', counts.assigned), ('free', 'Not in a network', counts.free)], counts.assigned ~ ' of ' ~ network.net.num_addresses ~ ' addresses in networks') }}
+  </section>
+</div>
+<section class="card spaced">
+  <h2>Networks</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Network</th><th>Name</th><th>In use</th><th></th><th>Comment</th></tr></thead>
+    <tbody>{% for c in children %}{% set u = use[c.id] %}
+    <tr><td><a href="/ipam/networks/{{ c.id }}"><code>{{ c.prefix }}</code></a></td><td>{{ c.name }}</td>
+      <td class="nowrap">{{ u[0] }} / {{ u[1] }}{% if c.container %} <span class="muted small">in networks</span>{% endif %}</td>
+      <td style="min-width: 120px">{{ meter(100 * u[0] / u[1] if u[1] else 0) }}</td><td class="small">{{ c.comment }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+</section>
+{% endblock %}

@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+{% block title %}Log in · LiteBlox{% endblock %}
+{% block content %}
+<section class="card login">
+  <h1>LiteBlox</h1>
+  {% if no_users %}
+  <p class="notice">No accounts yet. Create the first admin from the host:<br>
+    <code>docker compose exec liteblox liteblox user add &lt;name&gt; --role admin</code></p>
+  {% endif %}
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="/login">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <label>Username
+      <input name="username" value="{{ username or '' }}" autocomplete="username" autofocus required>
+    </label>
+    <label>Password
+      <input name="password" type="password" autocomplete="current-password" required>
+    </label>
+    <button type="submit">Log in</button>
+  </form>
+  <p class="small muted spaced">Setting up? <a href="/help/node-prep">Preparing a node</a></p>
+</section>
+{% endblock %}

@@ -1,0 +1,64 @@
+{% extends 'base.html' %}
+{% from 'partials/ui.html' import action_bar %}
+{% block title %}IPAM · Settings · LiteBlox{% endblock %}
+{% block content %}
+{% include 'partials/settings_tabs.html' %}
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if done %}<p class="notice">{{ done }}</p>{% endif %}
+<p class="page-intro muted">What IPAM keeps of what the nodes see, and when an address counts as flapping (two devices on one address). <a href="/help/ipam#devices-seen">More in Help</a>.</p>
+<form method="post" action="/settings/ipam" class="settings card form-card">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  <h2>Devices seen</h2>
+  <div class="setting">
+    <label class="setting-name" for="keep_days">Keep for</label>
+    <div class="setting-control"><span class="inline-actions"><input id="keep_days" name="keep_days" value="{{ form.keep_days }}" class="num" inputmode="numeric"> days</span>
+      {% if errors.keep_days %}<span class="error-text small">{{ errors.keep_days }}</span>{% endif %}
+      <span class="muted small">An address or MAC no node has seen for this long is dropped from Devices seen, the address cards and next free.</span></div>
+  </div>
+  <div class="setting">
+    <label class="setting-name" for="seen_hours">Counts as in use for</label>
+    <div class="setting-control"><span class="inline-actions"><input id="seen_hours" name="seen_hours" value="{{ form.seen_hours }}" class="num" inputmode="numeric"> hours</span>
+      {% if errors.seen_hours %}<span class="error-text small">{{ errors.seen_hours }}</span>{% endif %}
+      <span class="muted small">A seen address with nothing else on it (no name, lease or reservation) shows as free on the network pages after this, but stays in Devices seen until Keep for drops it. Next free still passes it over for the whole Keep for time.</span></div>
+  </div>
+  <div class="setting">
+    <label class="setting-name" for="flap_changes">Flapping</label>
+    <div class="setting-control"><span class="inline-actions"><input id="flap_changes" name="flap_changes" value="{{ form.flap_changes }}" class="num" inputmode="numeric"> MAC changes within <input name="flap_minutes" value="{{ form.flap_minutes }}" class="num" inputmode="numeric" aria-label="minutes"> minutes</span>
+      {% if errors.flap_changes %}<span class="error-text small">changes: {{ errors.flap_changes }}</span>{% endif %}
+      {% if errors.flap_minutes %}<span class="error-text small">minutes: {{ errors.flap_minutes }}</span>{% endif %}
+      <span class="muted small">puts the address in Needs attention, until you acknowledge it on its address card.</span></div>
+  </div>
+  <div class="setting" id="keep-seen">
+    <span class="setting-name">Stale DHCP names</span>
+    <div class="setting-control"><label class="check"><input type="checkbox" name="keep_seen_names" value="1" {% if form.keep_seen_names %}checked{% endif %}><span>Keep a DHCP name while the nodes still see its address</span></label>
+      <span class="muted small">A name Kea registered whose lease is gone counts as stale (and a dynamic zone may reclaim it) unless a node saw its address within that zone's reclaim time. <a href="/help/dynamic#stale-dhcp-names">More</a></span></div>
+  </div>
+  <h2 class="spaced" id="ptr">Names from DNS (PTR lookups)</h2>
+  <div class="setting">
+    <label class="setting-name" for="resolver">Resolver</label>
+    <div class="setting-control"><input id="resolver" name="resolver" value="{{ form.resolver }}" maxlength="64" placeholder="off, or e.g. 192.168.1.1 or 192.168.1.1:5353">
+      {% if errors.resolver %}<span class="error-text small">{{ errors.resolver }}</span>{% endif %}
+      <span class="muted small">A DNS server LiteBlox asks for the PTR of each used address, for names that live in DNS LiteBlox doesn't run. They show as rDNS on the network pages and address cards, and IPAM warns when one differs from the address's IPAM name. Empty: no lookups.
+        {%- if resolver and ptr_counts.n %} {{ ptr_counts.n }} looked up so far, {{ ptr_counts.named or 0 }} with a name{% if ptr_counts.failed %}, {{ ptr_counts.failed }} failed{% endif %}.{% endif %}</span></div>
+  </div>
+  <div class="setting">
+    <label class="setting-name" for="ptr_hours">Look up again after</label>
+    <div class="setting-control"><span class="inline-actions"><input id="ptr_hours" name="ptr_hours" value="{{ form.ptr_hours }}" class="num" inputmode="numeric"> hours</span>
+      {% if errors.ptr_hours %}<span class="error-text small">{{ errors.ptr_hours }}</span>{% endif %}
+      <span class="muted small">A network's page looks up its used addresses whose answer is older than this when it opens (in the background: the page never waits), and a sweep looks up what answered. A failed lookup is tried again after an hour.</span></div>
+  </div>
+  {% call action_bar() %}<button type="submit">Save</button>{% endcall %}
+</form>
+<section class="settings card form-card spaced">
+  <h2>MAC vendors</h2>
+  <div class="setting">
+    <span class="setting-name">Vendor list</span>
+    <div class="setting-control">
+      {% if oui.date %}<span>{{ oui.count }} prefixes, from {{ oui.date|reltime }}</span>{% else %}<span class="muted">not fetched yet</span>{% endif %}
+      {% if cfg.oui_error %}<span class="error-text small">{{ cfg.oui_error }}</span>{% endif %}
+      <span class="muted small">The IEEE's list (<code>oui.txt</code>), fetched again every week. A MAC its device made up (phones do, per network) shows as a private address.</span>
+      <form method="post" action="/settings/ipam/vendors"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button type="submit" class="secondary small">Fetch now</button></form>
+    </div>
+  </div>
+</section>
+{% endblock %}

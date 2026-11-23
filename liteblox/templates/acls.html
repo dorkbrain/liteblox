@@ -1,0 +1,50 @@
+{% extends 'base.html' %}
+{% from 'partials/ui.html' import empty %}
+{% block title %}ACLs · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+{% set tab = 'acls' %}{% include 'partials/settings_tabs.html' %}
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+<section class="card">
+  <p class="muted">Named address-match lists, written into <code>acls.conf</code> on every node LiteBlox has taken over. Use a name anywhere a list goes: a node's server settings (allow-query, allow-recursion, listen-on) or a zone's allow-transfer / allow-query. Saving one applies it to each node in turn, checks the node still answers, and rolls every node back if one doesn't.</p>
+  {% if acls %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Name</th><th>Matches</th><th>Used by</th><th></th></tr></thead>
+    <tbody>
+    {% for a, used in acls %}
+    <tr>
+      <td><code>{{ a.name }}</code></td>
+      <td class="small">{{ a.items|join(', ') }}</td>
+      <td class="small">{% if used %}{{ used|join('; ') }}{% else %}<span class="muted">nothing</span>{% endif %}</td>
+      <td class="inline-actions">
+        <details><summary class="small">Edit</summary>
+          <form method="post" action="/settings/acls" class="stack">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+            <input type="hidden" name="name" value="{{ a.name }}">
+            <textarea name="items" rows="3" spellcheck="false" aria-label="Items of {{ a.name }}">{{ a.items|join('\n') }}</textarea>
+            <div><button type="submit" class="secondary">Save and apply</button></div>
+          </form></details>
+        {% if not used %}<form method="post" action="/settings/acls/{{ a.name }}/delete" data-confirm="Delete ACL {{ a.name }} from every node?" data-confirm-ok="Delete">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+          <button type="submit" class="danger small">Delete</button></form>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}{{ empty('No ACLs yet. Add one below to name a group of addresses once.') }}{% endif %}
+</section>
+<section class="card form-card spaced">
+  <h2>Add an ACL</h2>
+  <form method="post" action="/settings/acls" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="create" value="true">
+    <label>Name <input name="name" value="{{ form.name if form.create else '' }}" placeholder="lan" required spellcheck="false"></label>
+    <label><span>Matches, one per line: addresses, networks, other ACL names, <code>key NAME</code>; <code>!</code> in front excludes</span>
+      <textarea name="items" rows="3" spellcheck="false" placeholder="192.168.1.0/24&#10;localhost">{{ form['items'] if form.create else '' }}</textarea></label>
+    <div><button type="submit">Add and apply to nodes</button></div>
+  </form>
+</section>
+{% endblock %}

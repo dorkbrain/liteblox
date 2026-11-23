@@ -1,0 +1,3 @@
+<ol class="checklist">{% for s in overview.setup %}
+  <li class="{{ 'done' if s.done }}"><span class="tick" aria-hidden="true">{{ '✓' if s.done else loop.index }}</span>{% if s.done or not user.is_admin %}<span>{{ s.what }}</span>{% else %}<a href="{{ s.link }}">{{ s.what }}</a>{% endif %}</li>
+{% endfor %}</ol>

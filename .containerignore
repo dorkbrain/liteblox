@@ -1,0 +1,12 @@
+.git/
+.venv/
+WIP/
+CLAUDE.local.md
+deploy/
+dist/
+testenv/
+tests/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+*.egg-info/

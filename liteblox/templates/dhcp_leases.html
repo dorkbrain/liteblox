@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% from 'partials/dhcp_addresses.html' import addresses_table, counts, filter_box, sorting with context %}
+{% block title %}Leases · DHCP · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="heading">
+  <h1><a href="/dhcp">DHCP</a> · Leases and reservations</h1>
+  {{ filter_box() }}
+  <a class="small nowrap" href="/dhcp/leases.csv" title="Download every subnet's addresses as CSV, read from Kea again">Export CSV</a>
+</div>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if done %}<p class="notice">{{ done }}</p>{% endif %}
+{% for e in errors %}<p class="error">{{ e }}</p>{% endfor %}
+{% if not serving %}<p class="muted">No node serves DHCP yet.</p>{% endif %}
+{% for subnet, rows in groups %}
+<section class="card spaced lease-group">
+  <h2><a href="/dhcp/subnets/{{ subnet.id }}/addresses"><code>{{ subnet.prefix }}</code></a> <span class="muted small">{{ counts(tally(rows)) }}</span></h2>
+  {{ addresses_table(rows, subnet, '/dhcp/leases') }}
+</section>
+{% endfor %}
+{% for subnet_id, rows in strays %}
+<section class="card spaced lease-group">
+  <h2>Subnet {{ subnet_id }} <span class="muted small">not in LiteBlox: Kea has it in a config edited on the node</span></h2>
+  {{ addresses_table(rows, None, '/dhcp/leases') }}
+</section>
+{% endfor %}
+{% if serving and not errors and not groups and not strays %}<p class="muted">No leases or reservations yet.</p>{% endif %}
+{{ sorting() }}
+{% endblock %}

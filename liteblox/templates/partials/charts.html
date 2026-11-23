@@ -1,0 +1,12 @@
+{# Small graphs drawn on the server: spark is stats.spark()'s answer (None: nothing to draw yet). #}
+{% macro sparkline(spark, title='', hours=24) -%}
+{%- if spark %}<svg class="spark" viewBox="0 0 100 24" preserveAspectRatio="none" role="img" aria-label="{{ title }}"><title>{{ title }}{{ ', ' if title }}last {{ hours }} h, peak {{ '%.4g'|format(spark.peak) }}</title><path class="area" d="{{ spark.area }}"/><path class="line" d="{{ spark.line }}" vector-effect="non-scaling-stroke"/></svg>
+{%- else %}<span class="spark spark-empty muted small" title="no history yet">–</span>{% endif -%}
+{%- endmacro %}
+
+{# A bar from 0 to 100 %: amber from 80, red from 95. #}
+{% macro meter(pct, title='') -%}
+{%- if pct is none %}<div class="bar off" title="{{ title or 'no figures' }}"></div>
+{%- else %}<div class="bar{{ ' bad' if pct >= 95 else ' warn' if pct >= 80 }}" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ pct|round(0)|int }}" title="{{ title }}"><span style="width:{{ [[pct, 0]|max, 100]|min|round(1) }}%"></span></div>
+{%- endif -%}
+{%- endmacro %}

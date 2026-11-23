@@ -1,0 +1,96 @@
+{% extends 'base.html' %}
+{% from 'partials/ui.html' import action_bar %}
+{% from 'partials/settings.html' import setting %}
+{% block title %}{{ 'Settings · ' ~ v.prefix if subnet_id else 'Add subnet' }} · DHCP · LiteBlox{% endblock %}
+{% block main_class %}{{ 'wide' if subnet_id }}{% endblock %}
+{% macro field(name, placeholder='', rows=None) %}{% if rows %}<textarea id="f-{{ name }}" name="{{ name }}" rows="{{ rows }}" spellcheck="false" placeholder="{{ placeholder }}" {% if not user.is_admin %}readonly{% endif %}>{{ v[name] }}</textarea>{% else %}<input id="f-{{ name }}" name="{{ name }}" value="{{ v[name] }}" placeholder="{{ placeholder }}" spellcheck="false" {% if not user.is_admin %}readonly{% endif %}>{% endif %}{% if errors[name] %}<div class="error-text small">{{ errors[name] }}</div>{% endif %}{% endmacro %}
+{% block content %}
+{% if subnet_id %}{% with subnet = {'id': subnet_id, 'prefix': v.prefix} %}{% include 'partials/dhcp_subnet_tabs.html' %}{% endwith %}
+{% else %}<h1><a href="/dhcp">DHCP</a> · Add subnet</h1>{% endif %}
+{% if request.query_params.get('error') %}<p class="error" role="alert">{{ request.query_params.get('error') }}</p>{% endif %}
+{% if errors %}<p class="error" role="alert">Not saved: fix the fields marked below.</p>{% endif %}
+{% if not serving %}<p class="notice">No node serves DHCP on an interface yet. A subnet added now is saved but not served: Kea answers for it once you tick its interface under <a href="/dhcp">Servers</a>.</p>{% endif %}
+<form method="post" action="/dhcp/subnets" id="subnet-form"
+      data-confirm="Apply this subnet? Each DHCP node is backed up, changed and checked; a failure rolls everything back." data-confirm-ok="Apply">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  {% if subnet_id %}<input type="hidden" name="id" value="{{ subnet_id }}">{% endif %}
+  <section class="card form-card settings">
+    <h2>Addresses</h2>
+    {% call setting('Subnet', None, 'The network, e.g. <code>192.168.0.0/24</code>. A DHCP node needs an address in it on a served interface; Kea answers for it on that interface only.' ~ (' Served on <code>' ~ v.interface ~ '</code>.' if v.interface else ''), 'f-prefix') %}{{ field('prefix', '192.168.0.0/24') }}{% endcall %}
+    {% call setting('Pools', None, 'The addresses Kea hands out: one range per line, <code>first - last</code> or a CIDR. Keep them clear of static addresses.', 'f-pools') %}{{ field('pools', '192.168.0.100 - 192.168.0.199', 3) }}{% endcall %}
+  </section>
+  <section class="card form-card settings spaced">
+    <h2>Options for this subnet</h2>
+    <p class="muted small page-intro">Empty fields use the <a href="/dhcp/settings">DHCP settings</a>. Lists take addresses or names separated by commas or spaces.</p>
+    {% call setting('Router', 'routers', 'The default gateway clients get.', 'f-routers') %}{{ field('routers', 'none') }}{% endcall %}
+    {% call setting('DNS servers', 'domain-name-servers', ('LiteBlox\'s DNS nodes in this subnet: <code>' ~ suggested|join(', ') ~ '</code>') if suggested else None, 'f-dns') %}{{ field('dns', suggested|join(', ') or 'from the DHCP settings') }}{% endcall %}
+    {% call setting('Domain', 'domain-name', None, 'f-domain') %}{{ field('domain', 'home.example') }}{% endcall %}
+    {% call setting('Search domains', 'domain-search', None, 'f-search') %}{{ field('search') }}{% endcall %}
+    {% call setting('NTP servers', 'ntp-servers', ('LiteBlox\'s time servers in this subnet: <code>' ~ suggested_ntp|join(', ') ~ '</code>') if suggested_ntp else None, 'f-ntp') %}{{ field('ntp', suggested_ntp|join(', ') or 'none') }}{% endcall %}
+  </section>
+  <section class="card form-card settings spaced" id="dns">
+    <h2>DNS registration</h2>
+    {% if errors.ddns %}<p class="error small">{{ errors.ddns }}</p>{% endif %}
+    {% if ddns_mode == 'off' %}
+    <p class="muted small">DNS registration is off for every subnet: <a href="/dhcp/settings#dns">DHCP → Settings → DNS registration</a> says where it goes.</p>
+    {% if v.ddns %}<input type="hidden" name="ddns" value="1"><input type="hidden" name="ddns_zone_id" value="{{ v.ddns_zone_id }}"><input type="hidden" name="ddns_suffix" value="{{ v.ddns_suffix }}"><input type="hidden" name="ddns_reverse" value="{{ v.ddns_reverse }}">{% endif %}
+    {% elif ddns_mode == 'external' %}
+    {% call setting('Register clients', None, 'Kea adds each client\'s name (A, and a DHCID record that marks it as DHCP\'s) in the domain at ' ~ (ddns_server or 'the DNS server') ~ ', and its PTR in the reverse zone. It removes them when the lease is released or expires, and never overwrites a name it didn\'t register.', 'f-ddns') %}
+      <label class="check"><input type="checkbox" id="f-ddns" name="ddns" value="1" {% if v.ddns %}checked{% endif %} {% if not user.is_admin %}disabled{% endif %}><span>register in DNS at <code>{{ ddns_server or '?' }}</code>{% if ddns_key %}, signed with key <code>{{ ddns_key.name }}</code>{% endif %}</span></label>{% endcall %}
+    {% call setting('Domain', 'ddns-qualifying-suffix', 'Clients are registered as <code>host.DOMAIN</code>, in that zone at the server (it must be the zone\'s primary).', 'f-ddns_suffix') %}{{ field('ddns_suffix', 'dhcp.home.lan') }}{% endcall %}
+    {% call setting('Reverse zones', None, 'Where the PTRs go. Empty: worked out from the subnet' ~ ((': <code>' ~ derived_reverse|join('</code>, <code>') ~ '</code>') if derived_reverse else '') ~ '. Give them when that server\'s reverse zones are cut differently (e.g. <code>168.192.in-addr.arpa</code>).', 'f-ddns_reverse') %}{{ field('ddns_reverse', 'worked out from the subnet') }}{% endcall %}
+    <input type="hidden" name="ddns_zone_id" value="{{ v.ddns_zone_id }}">
+    {% else %}
+    {% call setting('Register clients', None, 'Kea adds each client\'s name (A, and a DHCID record that marks it as DHCP\'s) to the zone, and its PTR to the dynamic reverse zone that covers the subnet. It removes them when the lease is released or expires, and never overwrites a name it didn\'t register.' ~ ('' if ddns_key else ' Pick the key it signs with first: <a href="/dhcp/settings">DHCP → Settings</a>.'), 'f-ddns') %}
+      <label class="check"><input type="checkbox" id="f-ddns" name="ddns" value="1" {% if v.ddns %}checked{% endif %} {% if not user.is_admin %}disabled{% endif %}><span>register in DNS{% if ddns_key %}, signed with key <code>{{ ddns_key.name }}</code>{% endif %}</span></label>{% endcall %}
+    {% call setting('Zone', None, 'A dynamic forward zone. A subdomain just for DHCP clients keeps their names apart from yours.', 'f-ddns_zone_id') %}
+      <select id="f-ddns_zone_id" name="ddns_zone_id" {% if not user.is_admin %}disabled{% endif %}><option value="">choose…</option>
+        {% for z in ddns_zones %}<option value="{{ z.id }}" {% if v.ddns_zone_id|string == z.id|string %}selected{% endif %}>{{ z.name }}</option>{% endfor %}</select>
+      {% if not ddns_zones %}<span class="muted small">no dynamic forward zone yet</span>{% endif %}
+      {% if errors.ddns_zone_id %}<div class="error-text small">{{ errors.ddns_zone_id }}</div>{% endif %}{% endcall %}
+    {% call setting('Name suffix', 'ddns-qualifying-suffix', 'Clients are registered as <code>host.SUFFIX</code>. Empty: the zone itself; or a name inside it, e.g. <code>dhcp.home.lab</code>.', 'f-ddns_suffix') %}{{ field('ddns_suffix', 'the zone') }}{% endcall %}
+    <input type="hidden" name="ddns_reverse" value="{{ v.ddns_reverse }}">
+    {% endif %}
+  </section>
+  <section class="card form-card settings spaced">
+    <h2>Lease times</h2>
+    <p class="muted small page-intro">Seconds; empty uses the DHCP settings (or Kea's default: 7200 for the lease).</p>
+    {% call setting('Lease time', 'valid-lifetime', None, 'f-valid_lifetime') %}{{ field('valid_lifetime') }}{% endcall %}
+    {% call setting('Renew after', 'renew-timer', None, 'f-renew_timer') %}{{ field('renew_timer') }}{% endcall %}
+    {% call setting('Rebind after', 'rebind-timer', None, 'f-rebind_timer') %}{{ field('rebind_timer') }}{% endcall %}
+  </section>
+  <section class="card form-card settings spaced">
+    <h2>More</h2>
+    {% call setting('Extra options', 'option-data', 'Any other DHCP options, as Kea\'s JSON list, e.g. <code>[{"name": "time-offset", "data": "3600"}]</code>.', 'f-extra_options') %}{{ field('extra_options', '[]', 3) }}{% endcall %}
+    {% call setting('Extra subnet settings', None, 'A JSON object of other Kea subnet4 parameters (client classes, relay, ...). Kea checks them on the node.', 'f-extra') %}{{ field('extra', '{}', 3) }}{% endcall %}
+    {% call setting('Comment', None, None, 'f-comment') %}{{ field('comment') }}{% endcall %}
+  </section>
+  {% if user.is_admin %}
+  <div id="subnet-review"></div>
+  {% call action_bar('/dhcp/subnets/' ~ subnet_id if subnet_id else '/dhcp', sticky=True) %}<button type="button" hx-post="/dhcp/subnets/preview" hx-include="#subnet-form"
+    hx-target="#subnet-review" hx-swap="innerHTML show:#subnet-review:top">Review changes</button>{% endcall %}
+  {% endif %}
+</form>
+<script>
+  (function () {     // a review is of the values as they were; editing a field afterwards clears it
+    const form = document.getElementById('subnet-form');
+    form && form.addEventListener('input', function () {
+      const review = document.getElementById('subnet-review');
+      if (review) review.innerHTML = '';
+    });
+  })();
+</script>
+{% if user.is_admin and subnet_id %}
+<section class="card form-card settings spaced danger-zone" id="danger">
+  <h2>Danger zone</h2>
+  {% call setting('Delete this subnet', None, 'Kea stops answering for ' ~ v.prefix ~ ' on every DHCP node (each is backed up first). Clients keep their address until their lease runs out.', 'f-confirm') %}
+    <form method="post" action="/dhcp/subnets/{{ subnet_id }}/delete" class="inline-actions">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input id="f-confirm" name="confirm" autocomplete="off" spellcheck="false" placeholder="type {{ v.prefix }} to confirm"
+        oninput="this.form.querySelector('button').disabled = this.value.trim() !== '{{ v.prefix }}'">
+      <button type="submit" class="danger" disabled>Delete {{ v.prefix }}</button>
+    </form>
+  {% endcall %}
+</section>
+{% endif %}
+{% endblock %}

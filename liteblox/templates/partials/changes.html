@@ -1,0 +1,17 @@
+{# Record-level changes from records.summarize(): added, changed, removed. #}
+{% macro changes_list(summary) -%}
+<ul class="plain">
+  {% for a in summary.added %}<li><span class="pill ready">added</span> <code>{{ a.name }} {{ a.ttl or '' }} {{ a.type }} {{ a.data }}</code></li>{% endfor %}
+  {% for o, n in summary.changed %}<li><span class="pill warn">changed</span> <code>{{ o.name }} {{ o.type }}</code>:
+    {%- if o.type == 'SOA' and o.data.split()|length == 7 and n.data.split()|length == 7 %}
+    {%- set a, b = o.data.split(), n.data.split() %}
+    {%- set labels = ['primary nameserver', 'mailbox', 'serial', 'refresh', 'retry', 'expire', 'negative TTL'] %}
+    {%- for i in range(7) if a[i] != b[i] %} {{ labels[i] }} <code>{{ a[i] }}</code> → <code>{{ b[i] }}</code>{% if not loop.last %},{% endif %}{% endfor %}
+    {%- if o.ttl != n.ttl %} TTL <code>{{ o.ttl or 'default' }}</code> → <code>{{ n.ttl or 'default' }}</code>{% endif %}
+    {%- elif o.ttl != n.ttl or o.data != n.data %} <code>{{ o.ttl or '' }} {{ o.data }}</code> → <code>{{ n.ttl or '' }} {{ n.data }}</code>
+    {%- else %} <code>{{ o.data }}</code>{% endif %}
+    {%- if o.comment != n.comment %} comment {% if o.comment %}<code>{{ o.comment }}</code>{% else %}<span class="muted">none</span>{% endif %} → {% if n.comment %}<code>{{ n.comment }}</code>{% else %}<span class="muted">none</span>{% endif %}{% endif %}</li>{% endfor %}
+  {% for r in summary.removed %}<li><span class="pill error">removed</span> <code>{{ r.name }} {{ r.ttl or '' }} {{ r.type }} {{ r.data }}</code></li>{% endfor %}
+  {% if not (summary.added or summary.changed or summary.removed) %}<li class="muted">Only formatting or comment lines changed.</li>{% endif %}
+</ul>
+{%- endmacro %}

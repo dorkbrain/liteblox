@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+{% from 'partials/ui.html' import breadcrumb %}
+{% block title %}Records only {{ node.name }} had · {{ report.zone }} · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="heading">
+  {{ breadcrumb([('/nodes/' ~ node.id, node.name), ('/zones/' ~ report.zone, report.zone)], 'Records only ' ~ node.name ~ ' had') }}
+  <a class="button secondary" href="/nodes/{{ node.id }}/reports/{{ report.id }}/old">Download its copy</a>
+</div>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if done %}<p class="notice">{{ done }}</p>{% endif %}
+<section class="card spaced">
+  <p>When {{ node.name }} was brought in line ({{ report.created_at|localtime }}), its copy (serial {{ report.node_serial or '–' }}) held these record sets that the primary's (serial {{ report.primary_serial or '–' }}) didn't, or held differently.
+  {% if report.dynamic %}Putting them back sends them to the primary as a dynamic update.{% else %}Putting them back adds them to the zone's draft, to review and publish.{% endif %}</p>
+  {% if report.resolved_at %}<p class="muted">Done {{ report.resolved_at|localtime }} by {{ report.resolved_by }}.</p>
+  {% elif report.rrsets %}
+  <form method="post" action="/nodes/{{ node.id }}/reports/{{ report.id }}/reapply">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <div class="table-wrap"><table>
+      <thead><tr><th></th><th>Name</th><th>Type</th><th>TTL</th><th>On {{ node.name }}</th><th>On the primary</th></tr></thead>
+      <tbody>{% for name, rtype, ttl, rdatas, now in report.rrsets %}
+      <tr>
+        <td>{% if user.is_admin %}<input type="checkbox" name="pick" value="{{ loop.index0 }}" aria-label="put back {{ name }} {{ rtype }}">{% endif %}</td>
+        <td><code>{{ name }}</code></td><td>{{ rtype }}</td><td>{{ ttl }}</td>
+        <td>{% for r in rdatas %}<code>{{ r }}</code>{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
+        <td>{% if now %}{% for r in now %}<code>{{ r }}</code>{% if not loop.last %}<br>{% endif %}{% endfor %}{% else %}<span class="muted">none</span>{% endif %}</td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+    {% if user.is_admin %}<div class="inline-actions"><button type="submit">Put back the ticked record sets</button></div>{% endif %}
+  </form>
+  {% if user.is_admin %}
+  <form method="post" action="/nodes/{{ node.id }}/reports/{{ report.id }}/dismiss" class="spaced" data-confirm="Dismiss this report? Nothing is put back; its copy stays downloadable from the node's backups." data-confirm-ok="Dismiss">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <button type="submit" class="secondary">Dismiss: nothing to put back</button>
+  </form>
+  {% endif %}
+  {% endif %}
+</section>
+{% endblock %}

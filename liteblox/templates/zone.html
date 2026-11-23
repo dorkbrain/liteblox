@@ -1,0 +1,253 @@
+{% extends 'base.html' %}
+{% block title %}{{ zone_name }} · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+{% include 'partials/zone_tabs.html' %}
+<div class="status-strip">
+  {% for n in nodes %}{% if n.in_sync is none %}<a class="pill" href="/nodes/{{ n.id }}" title="{{ 'secondary: transfers the zone from the primary' if n.role == 'secondary' else 'primary: takes the updates' }}">{{ n.name }} · {{ n.role or 'node' }}</a>
+  {% else %}<a class="pill {{ 'ready' if n.in_sync else 'warn' }}" href="/nodes/{{ n.id }}" title="{{ n.node_file }}">{{ n.name }}{% if n.role == 'primary' %} · primary{% endif %} {{ '✓' if n.in_sync else '· needs publish' }}</a>{% endif %}
+  {% else %}<span class="muted small">No node serves this zone yet.</span>{% endfor %}
+  {% if request.state.zone_dynamic %}<a class="pill ready" href="/zones/{{ zone_name }}/settings#dynamic" title="edits apply at once as DNS updates">dynamic</a>{% endif %}
+  {% if last_deploy %}<span class="muted small">last publish <a href="/zones/{{ zone_name }}/deploys/{{ last_deploy.id }}">#{{ last_deploy.id }}</a>
+    <span class="pill {{ 'ready' if last_deploy.status == 'ok' else ('running' if last_deploy.status == 'running' else 'error') }}">{{ last_deploy.status }}</span>
+    {% if last_deploy.serial %}serial {{ last_deploy.serial }} · {% endif %}{{ last_deploy.created_at|reltime }} · {{ last_deploy.username }}</span>{% endif %}
+  <a class="small" href="/zones/{{ zone_name }}/settings#nodes">Nodes</a>
+</div>
+{% if failed_ptr %}
+<section class="card spaced" id="failed-ptr">
+  <h2>PTR updates that didn't go out</h2>
+  <p class="small">{{ zone_name }} was published, but these changes to dynamic reverse zones failed. Nothing retries them on its own; the next publish of {{ zone_name }} sends them too.</p>
+  <ul class="plain small">{% for rname, ops, failed_at, error in failed_ptr %}{% for kind, address, target in ops %}
+    <li><code>{{ rname }}</code>: {% if kind == 'add' %}add PTR <code>{{ address }}</code> → <code>{{ target }}</code>{% else %}remove the PTR for <code>{{ address }}</code>{% endif %}</li>
+  {% endfor %}<li class="muted">{{ failed_at|localtime }}: {{ error }}</li>{% endfor %}</ul>
+  {% if user.is_admin %}
+  <div class="inline-actions">
+    <form method="post" action="/zones/{{ zone_name }}/ptr-queue/retry" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button type="submit">Retry</button>
+    </form>
+    <form method="post" action="/zones/{{ zone_name }}/ptr-queue/drop" class="inline"
+          data-confirm="Drop these PTR changes? The reverse zones keep what they have now." data-confirm-ok="Drop">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button type="submit" class="secondary">Drop</button>
+    </form>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+{% if request.query_params.get('conflict') %}<p class="error">The zone changed while you were editing; your SOA change was not saved.</p>{% endif %}
+{% if request.query_params.get('soa_error') %}<p class="error">SOA not saved: {{ request.query_params.get('soa_error') }}</p>{% endif %}
+
+<div class="grid" id="zone-top">
+  {% set soa_open = request.query_params.get('conflict') or request.query_params.get('soa_error') %}
+  <details class="card soa"{% if soa_open %} open{% endif %}>
+    <summary><h2>SOA</h2>
+      <span class="muted small soa-line"><code>{{ soa_fields.mname }}</code> · <code>{{ soa_fields.rname }}</code> · refresh {{ soa_fields.refresh|duration }} · retry {{ soa_fields.retry|duration }} · expire {{ soa_fields.expire|duration }} · negative {{ soa_fields.minimum|duration }} · serial {{ soa_fields.serial }}</span>
+      <span class="soa-toggle small">{{ 'Edit' if user.is_admin else 'Details' }}</span></summary>
+    <form method="post" action="/zones/{{ zone_name }}/soa" class="soa-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input type="hidden" name="rev" id="soa-rev" value="{{ rev }}">
+      {% if rr %}<input type="hidden" name="rr" value="{{ rr[soa.id] }}">{% endif %}
+      {% for key, label, help in soa_help %}
+      <div class="soa-field">
+        <label>{{ label }} <input name="{{ key }}" spellcheck="false" {% if not user.is_admin %}readonly{% endif %}
+          value="{{ soa_fields[key]|duration if key in ('refresh', 'retry', 'expire', 'minimum') else soa_fields[key] }}"
+          {% if key in ('refresh', 'retry', 'expire', 'minimum') and soa_fields[key].isdigit() %}title="{{ soa_fields[key] }} seconds"{% endif %}></label>
+        <button type="button" class="help-q" popovertarget="soa-help-{{ key }}" aria-label="What is {{ label }}?">?</button>
+        <div popover id="soa-help-{{ key }}" class="help-pop"><strong>{{ label }}</strong>{{ help|safe }}</div>
+      </div>
+      {% endfor %}
+      <p class="muted small">Serial {{ soa_fields.serial }}{% if published_serial and published_serial|string != soa_fields.serial %} (published {{ published_serial }}){% endif %}. {% if request.state.zone_dynamic %}named bumps it with every update.{% else %}It's bumped automatically when you publish.{% endif %}</p>
+      {% if user.is_admin %}<div><button type="submit">Save SOA</button></div>{% endif %}
+    </form>
+  </details>
+  <section class="card">
+    <h2>Nameservers</h2>
+    {% if ns_error %}<p class="error small">{{ ns_error }}</p>{% endif %}
+    <ul class="plain ns-list">{% for e in ns %}<li>
+      <code>{{ e.target }}</code>
+      <span class="muted small">{% if e.addresses is none %}address not held in LiteBlox{% elif e.addresses %}{{ e.addresses|join(', ') }}{% else %}no address{% endif %}</span>
+      {% for n in e.nodes %}<a class="pill ready" href="/nodes/{{ n.id }}" title="LiteBlox node">{{ n.name }}</a>{% endfor %}
+      {% if user.is_admin and ns|length > 1 %}
+      <form method="post" action="/zones/{{ zone_name }}/ns/{{ e.rec.id }}/delete" class="inline"
+            data-confirm="Remove nameserver {{ e.target }} from {{ zone_name }}?" data-confirm-ok="Remove">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="rev" value="{{ rev }}">
+        {% if rr %}<input type="hidden" name="rr" value="{{ rr[e.rec.id] }}">{% endif %}
+        <button type="submit" class="link danger small">Remove</button>
+      </form>{% endif %}</li>{% endfor %}</ul>
+    {% for p in ns_problems %}<p class="error small">{{ p }}</p>{% endfor %}
+    {% for n in ns_notes %}<p class="muted small">{{ n }}</p>{% endfor %}
+    {% if user.is_admin %}
+    <form method="post" action="/zones/{{ zone_name }}/ns" class="inline-actions">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="rev" value="{{ rev }}">{% if rr %}<input type="hidden" name="rr" value="">{% endif %}
+      {% set reverse = zone_name.endswith('.arpa') %}
+      <input name="target" placeholder="{{ 'ns3.example.com.' if reverse else 'ns3.' ~ zone_name ~ '.' }}" aria-label="New nameserver" spellcheck="false" required>
+      <button type="submit" class="secondary">Add nameserver</button>
+    </form>
+    {% if not reverse %}<p class="muted small">A name inside this zone also needs an A or AAAA record in the grid.</p>{% endif %}
+    {% endif %}
+  </section>
+</div>
+
+{% if zone_row.notes %}{% set lines = zone_row.notes.splitlines() %}
+<details class="card spaced zone-notes"{% if lines|length <= 6 %} open{% endif %}>
+  <summary><h2>Notes</h2> <span class="muted small">{{ lines|length }} line{{ '' if lines|length == 1 else 's' }}, kept in LiteBlox only{% if user.is_admin %} · <a href="/zones/{{ zone_name }}/settings#notes">Edit</a>{% endif %}</span></summary>
+  <pre class="notes">{{ zone_row.notes }}</pre>
+</details>
+{% endif %}
+
+{% if stale_view %}{% set sv = stale_view %}
+<section class="card spaced" id="stale">
+  <h2>DHCP names <a class="more" href="/zones/{{ zone_name }}">Close</a></h2>
+  <p class="muted small">The names Kea registered here (an A record with a DHCID). One is <strong>stale</strong> when no live
+    lease and no reservation has its name or address, and its lease ended more than {{ sv.grace|duration }} ago{% if sv.grace == sv.default %} (the longest lease time){% endif %}.
+    Reclaiming them on a schedule is {% if zone_row.reclaim %}<strong>on</strong>{% if zone_row.reclaim_checked_at %}, last checked {{ zone_row.reclaim_checked_at|reltime }}{% endif %}{% else %}off{% endif %}{% if user.is_admin %} (<a href="/zones/{{ zone_name }}/settings#reclaim">Settings</a>){% endif %}.
+    <a href="/help/dynamic#stale-dhcp-names">More</a></p>
+  {% if done %}<p class="ok-line small"><span class="dot ok" aria-hidden="true"></span>{{ done }}.</p>{% endif %}
+  {% if zone_row.reclaim and zone_row.reclaim_note %}<p class="notice small">The last check {{ 'held back' if zone_row.reclaim_note.startswith('hold') else 'was skipped' }}: {{ zone_row.reclaim_note.split(': ', 1)[-1] }}.</p>{% endif %}
+  {% if sv.trouble %}<p class="notice small">Nothing is called stale while the leases can't be trusted: {{ sv.trouble }}.</p>{% endif %}
+  {% if sv.names %}
+  <form method="post" action="/zones/{{ zone_name }}/stale" data-confirm="Delete the ticked names? Their A, DHCID and PTR records go now." data-confirm-ok="Delete">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <div class="table-wrap"><table class="stale-names">
+      <thead><tr>{% if user.is_admin %}<th class="select"></th>{% endif %}<th>Name</th><th>Address</th><th></th><th>Why</th></tr></thead>
+      <tbody>{% for i in sv.names %}
+      <tr class="{{ 'stale' if i.stale else 'kept' }}">
+        {% if user.is_admin %}<td class="select"><input type="checkbox" name="names" value="{{ i.fqdn }}" aria-label="Delete {{ i.fqdn }}" {% if i.stale %}checked{% endif %}></td>{% endif %}
+        <td><code>{{ i.fqdn }}</code></td>
+        <td>{% for a in i.addresses %}<a href="/search?q={{ a }}#address"><code>{{ a }}</code></a>{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
+        <td>{% if i.stale %}<span class="pill warn">stale</span>{% else %}<span class="pill">kept</span>{% endif %}</td>
+        <td class="small">{{ i.why }}</td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+    {% if user.is_admin %}<div class="inline-actions spaced"><button type="submit" class="danger">Delete the ticked names</button>
+      <span class="muted small">{{ sv.stale|length }} stale of {{ sv.names|length }}; you can tick a kept one too</span></div>{% endif %}
+  </form>
+  {% else %}<p class="muted">Kea hasn't registered any names here.</p>{% endif %}
+</section>
+{% endif %}
+
+<section class="card spaced" id="records-card">
+  <div class="toolbar">
+    <input type="search" id="record-filter" placeholder="Filter by name, value or comment" aria-label="Filter records">
+    <div class="chips" id="type-chips">
+      <button type="button" class="chip on" data-type="">All</button>
+      {% for t in types %}<button type="button" class="chip" data-type="{{ t }}">{{ t }}</button>{% endfor %}
+    </div>
+    {% if zone_row.dynamic and not stale_view %}<a class="small" href="/zones/{{ zone_name }}?stale=1#stale" title="The names DHCP registered here, and which are stale">Stale names</a>{% endif %}
+    <a class="small" href="/zones/{{ zone_name }}/records.csv" title="Download the records as CSV (name, ttl, type, value, comment)">Export CSV</a>
+    {% if user.is_admin %}
+    {% if not zone_row.dynamic %}<a class="button secondary" href="/zones/{{ zone_name }}/records/many" title="Paste many lines, or import a CSV">Add many</a>{% endif %}
+    <button type="button" hx-get="/zones/{{ zone_name }}/records/new" hx-target="#records-body" hx-swap="afterbegin">Add record</button>
+    {% endif %}
+  </div>
+  {% if unsupported %}
+  <p class="notice small">{{ unsupported|length }} line{{ '' if unsupported|length == 1 else 's' }} the grid can't edit (e.g. <code>{{ unsupported[0].raw.strip()[:40] }}</code>); use the <a href="/zones/{{ zone_name }}/raw">Raw</a> tab.</p>
+  {% endif %}
+  <div id="zone-alert"></div>
+  {% include 'partials/zone_grid.html' %}
+</section>
+<script>
+  // client-side filter; re-applied after htmx replaces the grid
+  (function () {
+    let type = '';
+    const input = document.getElementById('record-filter');
+    function apply() {
+      const q = input.value.trim().toLowerCase();
+      document.querySelectorAll('#records-body tr[data-search]').forEach(function (tr) {
+        tr.hidden = !((!q || tr.dataset.search.includes(q)) && (!type || tr.dataset.type === type));
+      });
+    }
+    input.addEventListener('input', apply);
+    document.getElementById('type-chips').addEventListener('click', function (e) {
+      const chip = e.target.closest('.chip');
+      if (!chip) return;
+      type = chip.dataset.type === type ? '' : chip.dataset.type;
+      this.querySelectorAll('.chip').forEach(function (c) { c.classList.toggle('on', c.dataset.type === type); });
+      apply();
+    });
+    document.body.addEventListener('htmx:afterSettle', apply);
+  })();
+
+  // row selection: only rows still shown count, so a filter never hides what an action will touch
+  (function () {
+    function shown() { return Array.from(document.querySelectorAll('#records-body tr:not([hidden]) .row-select')); }
+    function update() {
+      const bar = document.getElementById('bulk-bar');
+      if (!bar) return;
+      const rows = shown(), picked = rows.filter(function (c) { return c.checked; });
+      bar.hidden = picked.length === 0;
+      bar.querySelector('.bulk-count').textContent = picked.length;
+      const del = bar.querySelector('[data-bulk-delete]');
+      del.setAttribute('hx-confirm', 'Delete ' + picked.length + ' record' + (picked.length === 1 ? '' : 's') + '?' +
+        ({{ 'true' if auto_ptr else 'false' }} ? ' Their PTR records go too.' : ''));
+      const all = document.getElementById('select-shown');
+      if (all) {
+        all.checked = rows.length > 0 && picked.length === rows.length;
+        all.indeterminate = picked.length > 0 && picked.length < rows.length;
+      }
+    }
+    const card = document.getElementById('records-card');
+    card.addEventListener('change', function (e) {
+      if (e.target.id === 'select-shown') {
+        shown().forEach(function (c) { c.checked = e.target.checked; });
+      }
+      if (e.target.id === 'select-shown' || e.target.classList.contains('row-select')) update();
+    });
+    card.addEventListener('click', function (e) {
+      if (e.target.closest('[data-bulk-clear]')) {
+        document.querySelectorAll('#records-body .row-select').forEach(function (c) { c.checked = false; });
+        update();
+      } else if (e.target.closest('.chip')) {
+        setTimeout(update);         // after the filter has hidden its rows
+      }
+    });
+    document.getElementById('record-filter').addEventListener('input', function () { setTimeout(update); });
+    document.body.addEventListener('htmx:afterSettle', update);
+  })();
+
+  // click-to-sort; only the view changes, the zone file keeps its order
+  (function () {
+    const storeKey = 'liteblox-sort-{{ zone_name }}';
+    const collator = new Intl.Collator(undefined, {numeric: true, sensitivity: 'base'});
+    let sort = {key: null, dir: 1};
+    try { sort = JSON.parse(sessionStorage.getItem(storeKey)) || sort; } catch (e) {}
+    const value = {
+      name: tr => tr.dataset.name === '@' ? '' : tr.dataset.name,
+      ttl: tr => tr.dataset.ttl === '' ? -1 : Number(tr.dataset.ttl),
+      type: tr => tr.dataset.type,
+      value: tr => tr.dataset.value,
+      order: tr => Number(tr.dataset.order),
+    };
+    function compare(key) {
+      return function (a, b) {
+        const x = value[key](a), y = value[key](b);
+        const c = typeof x === 'number' ? x - y : collator.compare(x, y);
+        return c || Number(a.dataset.order) - Number(b.dataset.order);
+      };
+    }
+    function apply() {
+      const body = document.getElementById('records-body');
+      if (!body) return;
+      const rows = Array.from(body.querySelectorAll('tr[data-order]'));
+      rows.sort(compare(sort.key || 'order'));
+      if (sort.dir < 0 && sort.key) rows.reverse();
+      rows.forEach(function (tr) { body.appendChild(tr); });
+      document.querySelectorAll('button.sort').forEach(function (b) {
+        b.closest('th').setAttribute('aria-sort', b.dataset.sort !== sort.key ? 'none' : sort.dir > 0 ? 'ascending' : 'descending');
+      });
+    }
+    document.getElementById('records-card').addEventListener('click', function (e) {
+      const b = e.target.closest('button.sort');
+      if (!b) return;
+      const key = b.dataset.sort;
+      sort = sort.key !== key ? {key: key, dir: 1} : sort.dir > 0 ? {key: key, dir: -1} : {key: null, dir: 1};
+      try { sessionStorage.setItem(storeKey, JSON.stringify(sort)); } catch (e) {}
+      apply();
+    });
+    // re-sort when the whole grid is replaced, not when a row editor opens in place
+    document.body.addEventListener('htmx:afterSettle', function (e) {
+      if (e.detail.target && e.detail.target.id === 'zone-grid') apply();
+    });
+    apply();
+  })();
+</script>
+{% endblock %}

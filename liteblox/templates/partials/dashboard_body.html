@@ -1,0 +1,123 @@
+{% from 'partials/charts.html' import sparkline, meter %}
+{% from 'partials/node_pill.html' import node_pill %}
+{% set o = overview %}
+<div class="heading"><h1>Dashboard</h1>{% if o.checked %}<span class="muted small">checked {{ o.checked|reltime }} · every minute</span>{% endif %}</div>
+
+{% set on = o.modules %}
+{% if o.first_run %}
+<section class="card form-card">
+  <h2>What will this LiteBlox run?</h2>
+  {% if user.is_admin %}
+  <p class="muted">Pick the parts you want; the rest stays out of the way. You can change this later under Settings → Modules. <a href="/help/modules">What each one does</a></p>
+  <form method="post" action="/settings/modules" class="settings">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="next" value="dashboard">
+    {% with names=module_names, labels=module_labels, about=module_about, wanted=on, errors={}, in_use={} %}{% include 'partials/module_switches.html' %}{% endwith %}
+    <div class="inline-actions spaced"><button type="submit">Continue</button></div>
+  </form>
+  {% else %}
+  <p class="muted">An admin hasn't set this LiteBlox up yet.</p>
+  {% endif %}
+</section>
+{% elif o.setup and not o.nodes %}
+<section class="card form-card">
+  <h2>Getting started</h2>
+  <p class="muted">{% if on.dns %}LiteBlox runs BIND{% if on.dhcp or on.ntp %} (and optionally{% if on.dhcp %} Kea DHCP{% endif %}{% if on.dhcp and on.ntp %} and{% endif %}{% if on.ntp %} chrony{% endif %}){% endif %} on your own servers.
+  {%- elif on.dhcp %}LiteBlox runs Kea DHCP{% if on.ntp %} (and optionally chrony){% endif %} on your own servers.
+  {%- elif on.ntp %}LiteBlox runs chrony on your own servers.
+  {%- else %}IPAM keeps your networks and addresses; nodes on those networks are optional, to see devices and check addresses before handing them out.{% endif %}
+  Set it up in this order; {% if on.dns %}the <a href="/help/quick-start">Quick start</a> walks through each step{% else %}<a href="/help/modules">Modules</a> has the common shapes{% endif %}.</p>
+  {% include 'partials/dashboard_setup.html' %}
+</section>
+{% else %}
+<div class="tiles">
+  {% for t in o.tiles %}
+  <a class="tile {{ t.level }}" href="{{ t.link if user.is_admin or not t.link.startswith('/settings') else '/nodes' }}" data-tile="{{ t.key }}">
+    <span class="label">{{ t.label }} <span class="dot {{ t.level }}" aria-hidden="true"></span></span>
+    <span class="value">{{ t.value }}</span><span class="sub">{{ t.sub }}</span></a>
+  {% endfor %}
+</div>
+
+<div class="stack">
+    {% if o.setup %}
+    <section class="card"><h2>Setup</h2>{% include 'partials/dashboard_setup.html' %}</section>
+    {% endif %}
+    <section class="card" id="attention">
+      <h2>Needs attention</h2>
+      {% if o.problems %}
+      <ul class="attention">{% for p in o.problems %}
+        <li class="{{ p.severity }}"><span class="pill {{ 'error' if p.severity == 'error' else 'warn' if p.severity == 'warn' else '' }}">{{ {'error': 'error', 'warn': 'check', 'info': 'note'}[p.severity] }}</span><span class="what">{{ p.what }}</span>{% if p.link %}<a href="{{ p.link }}" class="small nowrap">Open</a>{% endif %}</li>
+      {% endfor %}</ul>
+      {% else %}
+      <p class="ok-line"><span class="dot ok" aria-hidden="true"></span>{% if o.nodes %}All good: every node answers, configs match and the clocks agree.{% else %}All good.{% endif %}</p>
+      {% endif %}
+    </section>
+
+    {% if o.nodes %}
+    <section class="card">
+      <h2>Services <a class="more" href="/nodes">Nodes</a></h2>
+      <div class="table-wrap"><table class="matrix">
+        <thead><tr><th>Node</th><th>Role</th><th>Status</th>{% if on.dns %}<th>DNS</th>{% endif %}{% if on.dhcp %}<th>DHCP</th>{% endif %}<th>Time</th><th>Backup</th><th>Agent</th><th>Load · mem · disk</th>{% if on.dns %}<th>Queries / min, 24 h</th>{% endif %}</tr></thead>
+        <tbody>{% for r in o.nodes %}{% set n = r.node %}{% set f = r.figures %}
+          <tr>
+            <td><a href="/nodes/{{ n.id }}" title="{{ n.host }}">{{ n.name }}</a></td>
+            <td>{% for m in r.modules %}<span class="pill"{% if m == 'IPAM' %} title="IPAM sweeps and checks {{ r.sweeps|join(', ') }} from here"{% endif %}>{{ m }}</span>{{ ' ' if not loop.last }}{% else %}<span class="muted small">agent only</span>{% endfor %}</td>
+            <td>{{ node_pill(n) }}</td>
+            {% if on.dns %}<td>{% if not n.bind %}<span class="muted">–</span>{% elif n.role %}<span class="pill {{ 'ready' if n.role == 'primary' }}" title="{{ r.zones }} zone{{ '' if r.zones == 1 else 's' }}">{{ n.role }}</span>{% elif n.managed %}<span class="muted small">none yet</span>{% else %}<span class="muted small">not taken over</span>{% endif %}</td>{% endif %}
+            {% if on.dhcp %}<td>{% if r.dhcp %}{% set label, colour, tip = r.dhcp %}<span class="pill {{ colour }}" title="{{ tip }}">{{ label }}</span>{% else %}<span class="muted">–</span>{% endif %}</td>{% endif %}
+            <td>{% if r.ntp %}<span class="dot {{ 'ok' if r.ntp.synced else 'warn' }}" aria-hidden="true"></span>{% if r.ntp.offset is number %}<span title="chrony's offset from its source">{{ r.ntp.offset|offset }}</span>{% else %}{{ 'synced' if r.ntp.synced else 'no source' }}{% endif %}
+              {%- elif r.skew is number %}<span class="dot {{ 'error' if (r.skew|abs) >= 120 else 'warn' if (r.skew|abs) >= 30 else 'ok' }}" aria-hidden="true"></span><span title="its clock minus LiteBlox's">{{ '%+.0f'|format(r.skew) }} s</span>
+              {%- else %}<span class="muted">–</span>{% endif %}</td>
+            <td>{% if r.backup %}<a href="/nodes/{{ n.id }}/backups" class="{{ 'error-text' if r.backup_stale }}">{{ r.backup|reltime }}</a>{% elif n.status != 'new' and (n.bind or n.dhcp or n.ntp) %}<a href="/nodes/{{ n.id }}/backups" class="error-text">none</a>{% else %}<span class="muted">–</span>{% endif %}</td>
+            <td>{{ n.agent_version or '–' }}{% if r.upgrade %} <a href="/nodes/{{ n.id }}" class="pill warn" title="this LiteBlox has a newer agent: its node page installs it">upgrade</a>{% endif %}</td>
+            <td class="figures">{% if f.load1 is not none %}<span title="load average, 1 min">{{ '%.2f'|format(f.load1) }}</span> · <span title="memory in use">{{ f.mem_used_pct|round|int }}%</span> · <span title="disk in use on /">{{ f.disk_used_pct|round|int if f.disk_used_pct is not none else '–' }}%</span>{% else %}<span class="muted">–</span>{% endif %}</td>
+            {% if on.dns %}<td class="spark-cell">{{ sparkline(r.qpm, n.name ~ ' queries per minute') }}<span class="num">{{ f.dns_qpm|round|int if f.dns_qpm is not none else '' }}</span></td>{% endif %}
+          </tr>
+        {% endfor %}</tbody></table></div>
+    </section>
+    {% endif %}
+
+  <div class="grid">
+    {% if o.pools %}
+    <section class="card">
+      <h2>DHCP pools <a class="more" href="/dhcp/leases">Leases</a></h2>
+      <div class="pools">{% for p in o.pools %}{% set s = p.subnet %}
+        <div class="pool">
+          <div class="pool-head"><a href="/dhcp/subnets/{{ s.id }}"><code>{{ s.prefix }}</code></a>
+            <span class="num">{% if not p.served %}<span class="pill warn">not served</span>{% elif not p.size %}no pool{% elif p.in_pool is none %}no figures yet{% else %}{{ p.in_pool|int }} / {{ p.size }}{% endif %}</span></div>
+          {% if p.size %}{{ meter(p.pct, (p.in_pool|int ~ ' of ' ~ p.size ~ ' addresses in the pools') if p.in_pool is not none else '') }}{% endif %}
+          <div class="pool-foot muted small">
+            <span>{% if p.outside %}{{ p.outside }} outside the pools · {% endif %}{{ p.reserved }} reservation{{ '' if p.reserved == 1 else 's' }}{% if s.registers %} · names in {{ s.qualifying_suffix }}{% endif %}</span>
+            {{ sparkline(p.spark, s.prefix ~ ' active leases') }}</div>
+        </div>
+      {% endfor %}</div>
+    </section>
+    {% endif %}
+    <section class="card">
+      <h2>Recent activity <a class="more" href="/jobs">All jobs</a>{% if user.is_admin %} <a class="more" href="/audit">Audit log</a>{% endif %}</h2>
+      {% if o.activity %}
+      <ul class="feed">{% for a in o.activity %}
+        <li><span class="when">{{ a.at|reltime }}</span>
+          <span>{% if a.link %}<a href="{{ a.link }}">{{ a.label }}</a>{% else %}{{ a.label }}{% endif %}
+            {%- if a.detail %} <span class="detail">{{ a.detail|truncate(80) }}</span>{% endif %}
+            {%- if a.status %} <span class="pill {{ {'ok': 'ok', 'failed': 'failed', 'running': 'running'}.get(a.status, '') }}">{{ a.status }}</span>{% endif %}
+            {%- if a.who %} <span class="muted small">{{ a.who }}</span>{% endif %}</span></li>
+      {% endfor %}</ul>
+      {% else %}
+      <p class="muted small">Nothing yet.</p>
+      {% endif %}
+    </section>
+    {% if user.is_admin %}
+    <section class="card">
+      <h2>Quick actions</h2>
+      <div class="quick">
+        {% if on.dns %}<a class="button secondary" href="/zones/new">Add zone</a>{% endif %}
+        {% if on.ipam %}<a class="button secondary" href="/ipam">Networks</a>{% endif %}
+        {% if o.pools %}<a class="button secondary" href="/dhcp/leases">Leases and reservations</a>{% endif %}
+        <a class="button secondary" href="/nodes/new">Add a node</a>
+      </div>
+    </section>
+    {% endif %}
+  </div>
+</div>
+{% endif %}

@@ -1,0 +1,32 @@
+{% extends 'base.html' %}
+{% block title %}{{ zone_name }} history · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+{% include 'partials/zone_tabs.html' %}
+{% set error = request.query_params.get('error') %}
+{% if error == 'draft' %}<p class="error">{{ zone_name }} already has a draft. Restoring replaces it (and any PTR changes linked to it); tick the box to confirm.</p>{% endif %}
+{% if error == 'parse' %}<p class="error">That version doesn't parse, so it can't be restored through the editor. Copy it into the Raw tab instead.</p>{% endif %}
+<section class="card">
+  <h2>{{ commit.subject }}</h2>
+  <p class="muted small">{{ commit.author }} · {{ commit.date|localtime }} · <code>{{ commit.sha[:10] }}</code></p>
+  <pre class="log diff">{{ diff or 'No changes (first version).' }}</pre>
+</section>
+{% if user.is_admin %}
+<section class="card spaced form-card">
+  <h2>Restore this version</h2>
+  {% if is_current %}
+  <p class="muted">This is the version that's published now.</p>
+  {% else %}
+  <p class="muted">Restoring puts this version into a draft. Nothing changes on the nodes until you review and publish it, and publishing gives it a new serial, higher than anything the nodes serve.</p>
+  <details><summary class="small">Difference from what's published now</summary><pre class="log diff">{{ vs_current }}</pre></details>
+  <form method="post" action="/zones/{{ zone_name }}/history/{{ commit.sha }}/restore" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    {% if is_draft %}
+    <label class="check"><input type="checkbox" name="replace" value="1"><span>Replace the current draft of {{ zone_name }} (its pending changes are lost)</span></label>
+    {% endif %}
+    <div><button type="submit">Restore into a draft</button></div>
+  </form>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}
