@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.7.2 — 2026-11-23
+
+- IPAM: First available on a network page jumps to the lowest free address with no name in DNS and highlights its row
+- Nodes on 64-bit ARM: a Raspberry Pi 4 with Raspberry Pi OS Lite (64-bit) ran DNS, DHCP failover and time as a node; the docs cover its NetworkManager address and a failover pair's interface names
+- Bootstrap waits up to 90 s for the agent to start (a Raspberry Pi right after installing packages took 15 s)
+- The DHCP review and drift views hide TSIG key secrets in Kea's DDNS config
+- Agent: a DHCP change on an interface made after Kea started (a new VLAN, say) no longer fails: Kea is made to look at the interfaces again
+- After updating, run Upgrade agents on the Nodes page (over mTLS; no Repair needed). No database changes
+
+
 ## 4.7.1 — 2026-11-23
 
 - IPAM: Add DNS… on an address row adds an A record (and its PTR) for the address in a zone you pick, without going to the zone page; offered on every row with no name in DNS yet

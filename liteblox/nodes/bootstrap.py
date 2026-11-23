@@ -497,20 +497,28 @@ def _install(r, node, zones, pki, version, log, kea=False, ntp=False, bind=True)
     node['cert_not_after'] = pki_mod.not_after(cert_pem).isoformat()
 
 
-def _verify(node, pki, log, attempts=10):
+VERIFY_WAIT = 90         # seconds: a Pi right after its apt run took 15 s to start the agent
+
+
+def _verify(node, pki, log, wait=VERIFY_WAIT):
     log(f"Checking the agent over mutual TLS at {node['host']}:{node['agent_port']}")
-    last = None
-    for _ in range(attempts):
+    last, said = None, False
+    deadline = time.monotonic() + wait
+    while True:
         try:
             with AgentClient(node['host'], pki, port=node['agent_port'], timeout=5) as c:
                 status = c.status()
             break
         except AgentError as e:
             last = e
-            time.sleep(1)
-    else:
-        raise BootstrapError(f'agent did not answer over mTLS: {last} '
-                             f'(is TCP {node["agent_port"]} open from LiteBlox?)')
+        if time.monotonic() >= deadline:
+            raise BootstrapError(f'agent did not answer over mTLS within {wait} s: {last} '
+                                 f'(is TCP {node["agent_port"]} open from LiteBlox?)')
+        if not said and time.monotonic() >= deadline - wait + 10:
+            # a slow node (a Raspberry Pi just after installing packages) can take a while to start Python
+            log(f'  not answering yet ({last}); waiting up to {wait} s for it to start')
+            said = True
+        time.sleep(1)
     if status.get('bind', True):
         log(f"  agent {status['agent_version']}, {status['named_version']}")
         log(f"  rndc: {'ok' if status['rndc_ok'] else 'FAILED'}; named-checkconf: "

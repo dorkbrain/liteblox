@@ -69,6 +69,7 @@ class FakeKeaSocket:
     def __init__(self, path, service='dhcp4'):
         self.path, self.service = path, service
         self.commands, self.fail_reload = [], False
+        self.unknown_interface = None     # an interface made after Kea started: config-reload fails until config-set
         self.ha_state = None
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.bind(path)
@@ -95,7 +96,17 @@ class FakeKeaSocket:
                     'local': {'role': 'primary', 'server-name': 'ns1', 'state': self.ha_state},
                     'remote': {'role': 'standby', 'server-name': 'ns2', 'last-state': 'hot-standby', 'in-touch': True}}}]
             return {'result': 0, 'arguments': args}
+        if command == 'config-set':
+            subnets = request['arguments']['Dhcp4'].get('subnet4') or []
+            if self.unknown_interface and any(x.get('interface') == self.unknown_interface for x in subnets):
+                return {'result': 1, 'text': 'still not present'}
+            self.unknown_interface = None                 # opening the sockets re-detected the interfaces
+            return {'result': 0, 'text': 'Configuration successful.'}
         if command == 'config-reload':
+            if self.unknown_interface:
+                return {'result': 1, 'text': 'configuration error using file: subnet configuration failed: Specified '
+                        f'network interface name {self.unknown_interface} for subnet 192.0.2.0/24 is not present in the '
+                        'system (kea-dhcp4.conf:90:22)'}
             if self.fail_reload:
                 return {'result': 1, 'text': 'fake reload failure'}
             return {'result': 0, 'text': 'Configuration successful.', 'arguments': {'hash': 'ABC'}}

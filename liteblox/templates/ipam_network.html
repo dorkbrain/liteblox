@@ -37,6 +37,7 @@
   <div class="toolbar">
     <h2 class="grow">Addresses</h2>
     {{ filter_box() }}
+    {% if first_free %}<a class="small" href="{{ base }}?ip={{ first_free }}#ip-{{ first_free }}" title="{{ first_free }}: the lowest free address with no name in DNS">First available</a>{% else %}<span class="small muted">No free address</span>{% endif %}
     <a class="small" href="{{ base }}?page={{ page }}{% if not used_only %}&used=1{% endif %}">{{ 'Show every address' if used_only else 'Used only' }}</a>
     <a class="small" href="/ipam/networks/{{ network.id }}/addresses.csv{{ '?used=1' if used_only }}" title="Download {{ 'the used addresses' if used_only else 'every address' }} of {{ network.prefix }} as CSV, all pages">Export CSV</a>
   </div>

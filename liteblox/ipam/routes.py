@@ -144,7 +144,7 @@ def network_page(request: Request, network_id: int, user: User = Depends(current
         'page': page, 'pages': view.pages(network), 'bounds': view.page_bounds(network, page),
         'blocks': view.blocks(facts, network), 'cells': view.cells(page_rows, ranges),
         'rows': [r for r in page_rows if r['state'] != 'free'] if used_only else page_rows, 'used_only': used_only,
-        'highlight': highlight, 'probe_nodes': _nodes_on(conn, network), 'kinds': model.KINDS,
+        'highlight': highlight, 'first_free': view.first_free(facts, network), 'probe_nodes': _nodes_on(conn, network), 'kinds': model.KINDS,
         'record_link': search.record_link, 'now': int(time.time()), 'resolver': ptr.config(conn)[0],
         'add_dns': user.is_admin and _dns_on(request) and bool(_forward_zones(conn)),
         'flapping': [f for f in seen.flapping(conn) if ipaddress.IPv4Address(f['ip']) in network.net],

@@ -129,7 +129,7 @@ Two nodes can share DHCP as a **hot-standby pair**:
 Clients notice nothing beyond their next renewal going to the other server.
 
 **Setting it up:**
-1. Set DHCP up on both nodes (each node's page → **Set up DHCP**). The standby needs interfaces with the same names as the ones the primary serves (`eth0` on both, say).
+1. Set DHCP up on both nodes (each node's page → **Set up DHCP**). The standby needs interfaces with the same names as the ones the primary serves (`eth0` on both, say). Where they differ (a Raspberry Pi's VLAN interface `eth0.100` beside a VM's `ens19`, say), rename one: with NetworkManager, `nmcli con modify <connection> connection.interface-name ens19`, then `nmcli con up <connection>`.
 2. On the DHCP tab, **Failover pair**: pick the primary and the standby, and each one's **link address**, which is where it listens for its partner. An address on the DHCP network is a good choice. Open TCP **8001** (or the port you pick) between the two addresses.
 3. **Review**, then **Pair them**. The standby changes first, then the primary. LiteBlox waits until both report **hot-standby**; if they don't find each other within 90 seconds, both are rolled back.
 

@@ -658,6 +658,8 @@ table.ipam-table tr.flap td { background: color-mix(in srgb, var(--warn) 12%, tr
 .notice.flap { border-left: 4px solid var(--warn); }
 table.ipam-table tr.focus td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 table.ipam-table tr:target td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+table.ipam-table tr.focus td:first-child { box-shadow: inset 4px 0 0 var(--accent); }
+table.ipam-table tr.focus { scroll-margin-top: 30vh; }     /* a jump to the row (First available) lands it mid-screen */
 .comment-cell .block { display: block; font-size: 11.5px; }
 .inline-form { display: flex; gap: 4px; }
 .inline-form input { padding: 3px 6px; font-size: 13px; min-width: 140px; }

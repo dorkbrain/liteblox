@@ -444,6 +444,8 @@ CONFIG_VALIDATORS = {
 # role: (top-level key, service)
 KEA_ROLES = {'kea-dhcp4.conf': ('Dhcp4', 'dhcp4'), 'kea-dhcp-ddns.conf': ('DhcpDdns', 'd2')}
 KEA_TOOLS = {'dhcp4': 'kea_dhcp4', 'd2': 'kea_dhcp_ddns'}
+# config-reload's error for a subnet on an interface Kea hasn't seen yet (made or renamed after Kea started)
+KEA_NEW_INTERFACE = 'is not present in the system'
 # the failover pair's mutual-TLS files (in kea_dir/tls): role -> the PEM block it must be
 KEA_TLS = {'tls/ha.crt': 'CERTIFICATE', 'tls/ha.key': 'PRIVATE KEY', 'tls/ca.crt': 'CERTIFICATE'}
 HA_KEYS = frozenset(('this-server-name', 'mode', 'heartbeat-delay', 'max-response-delay', 'max-ack-delay',
@@ -1945,6 +1947,34 @@ class Agent:
                 failed.append((service, e.message))
         return failed
 
+    def _kea_learn_interfaces(self):
+        """Kea learns the system's interfaces when it starts, and config-reload checks a subnet's interface against
+        that list before it looks again (which it does when it opens its sockets), so an interface made or renamed
+        after Kea started (a VLAN, say) fails the reload until Kea restarts. Instead: set the new config once with
+        the subnets' interface names left out, which opens the sockets and so re-detects the interfaces, then
+        reload the real file. [(service, error)] like _kea_reload."""
+        path = self.kea_paths()['kea-dhcp4.conf']
+        try:
+            with open(path) as f:
+                config = json.load(f)
+            dhcp4 = config['Dhcp4']
+            for subnet in dhcp4.get('subnet4') or []:
+                subnet.pop('interface', None)
+            for network in dhcp4.get('shared-networks') or []:
+                network.pop('interface', None)
+                for subnet in network.get('subnet4') or []:
+                    subnet.pop('interface', None)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+            return [('dhcp4', f'cannot read {path} to retry: {e}')]
+        try:
+            answer = kea_command(self.cfg['kea_access']['dhcp4'], 'config-set', config, timeout=30)
+        except AgentError as e:
+            return [('dhcp4', e.message)]
+        if answer.get('result') != 0:
+            return [('dhcp4', answer.get('text') or 'config-set failed')]
+        log.info('Kea did not know an interface yet: loaded the config without subnet interfaces so it looked again')
+        return self._kea_reload(['kea-dhcp4.conf'])
+
     def commit_dhcp(self, body):
         with self.lock:
             stage = self._take_stage(body.get('stage_id'), 'dhcp')
@@ -1963,6 +1993,8 @@ class Agent:
                 raise AgentError(HTTPStatus.FORBIDDEN, f'cannot replace the Kea config: {e}; nothing changed')
             roles = [os.path.relpath(lv, self.cfg['kea_dir']) for _, lv in stage['files']]
             failed = self._kea_reload(roles)
+            if any(service == 'dhcp4' and KEA_NEW_INTERFACE in message for service, message in failed):
+                failed = [f for f in failed if f[0] != 'dhcp4'] + self._kea_learn_interfaces()
             if failed:
                 self._undo(folder, manifest)
                 self._kea_reload(roles)          # back to the previous files

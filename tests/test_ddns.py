@@ -259,6 +259,22 @@ def test_rotating_the_key_updates_kea(conn, settings, dyn):  # noqa: F811
         'bmV3c2VjcmV0bmV3c2VjcmV0'
 
 
+
+def test_the_review_never_shows_a_tsig_secret(conn, settings, dyn, monkeypatch):  # noqa: F811
+    # a review that adds DDNS (or rewrites it) shows kea-dhcp-ddns.conf: the key's secret stays hidden
+    registering(conn)
+    node = nodes.get_node(conn, 1)
+    files = dhcp_apply.files_for(conn, node)
+    secret = json.loads(files['kea-dhcp-ddns.conf'])['DhcpDdns']['tsig-keys'][0]['secret']
+    calls = iter([{}, files])                       # before: nothing; after: the config with its key
+    monkeypatch.setattr(dhcp_apply, 'files_for', lambda *a, **k: next(calls))
+    monkeypatch.setattr(dhcp_apply, '_guard', lambda *a: None)
+    monkeypatch.setattr(dhcp_apply, 'live_interfaces', lambda *a: [])
+    diff = dhcp_apply.preview(conn, settings, node)['diff']
+    assert '"tsig-keys"' in diff and '"secret": "????????"' in diff and secret not in diff
+    assert nodes.mask_secrets('key "dhcp" { secret "c2VjcmV0"; };') == 'key "dhcp" { secret "????????"; };'
+
+
 # ── clocks ─────────────────────────────────────────────────────────────────────
 
 def test_clock_fields_and_states():

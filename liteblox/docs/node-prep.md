@@ -1,6 +1,6 @@
 # Preparing a node
 
-A **node** is a server LiteBlox runs BIND on (or Kea, chrony, or only the agent: see [Nodes without BIND](#nodes-without-bind)). LiteBlox installs BIND if it's missing and writes its whole configuration, so all a node needs is a Debian machine with a fixed address and an account that can use `sudo`.
+A **node** is a server LiteBlox runs BIND on (or Kea, chrony, or only the agent: see [Nodes without BIND](#nodes-without-bind)). LiteBlox installs BIND if it's missing and writes its whole configuration, so all a node needs is a Debian machine with a fixed address and an account that can use `sudo`. x86-64 and 64-bit ARM both work: a Raspberry Pi 4 or 5 running Raspberry Pi OS Lite (64-bit), which is Debian 13, makes a fine node.
 
 This page takes a fresh Debian 13 machine to the point where you can add it on the **Nodes** page, in about 15 minutes. For a server that already runs BIND with zones of its own, do steps 4–8, then see [Bringing in existing servers](/help/existing-servers).
 
@@ -36,6 +36,14 @@ ping -c 2 deb.debian.org
 ```
 
 Point `dns-nameservers` at an upstream resolver rather than at the node itself, so the node can still resolve names while BIND is being set up or is down.
+
+Raspberry Pi OS uses NetworkManager instead of ifupdown. Set the address on its wired connection (`nmcli con show` lists the connection names; Raspberry Pi Imager's settings can also set the hostname, the user and SSH):
+
+```bash
+nmcli con modify "Wired connection 1" ipv4.method manual ipv4.addresses 192.168.1.10/24 \
+    ipv4.gateway 192.168.1.1 ipv4.dns "1.1.1.1 1.0.0.1"
+nmcli con up "Wired connection 1"
+```
 
 ## 3. Hostname
 

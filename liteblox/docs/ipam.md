@@ -43,6 +43,8 @@ Below them, **Addresses** lists every address of the shown /24, used or free, wi
 
 **Used only** hides the free addresses. The filter box and the column headings work as on the DHCP **Addresses** tab.
 
+**First available** jumps to the lowest Free address in the network with no name in DNS, on whichever /24 it's on, and highlights its row (Used only is turned off). Nothing in LiteBlox uses it, no device has been seen on it lately, and the resolver's PTR lookup (rDNS) found no name for it either. **Check** on its row pings it to be sure, and an address in a DHCP pool can still be handed out at any time. With no free address left, it says so instead.
+
 **Export CSV** downloads the whole network, every /24 of it, not just the one shown (with **Used only** on, the used addresses only), with the columns `ip,state,names,ipam_name,rdns,ptr,mac,vendor,hostname,range,comment,comment_from,last_seen,flapping,checks`: the same fields as [the API](/help/api) gives, several values in a cell separated by `; `. A network bigger than a /16 exports its used addresses only. As in [the DHCP exports](/help/dhcp#leases-and-reservations), a cell that would start a spreadsheet formula gets a `'` in front.
 
 The network and broadcast addresses show in the list but are never counted.

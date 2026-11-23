@@ -6,7 +6,7 @@ description: What LiteBlox needs, the current container image and source downloa
 ## Requirements
 
 - **The LiteBlox host:** Docker with the compose plugin, or podman. Any small machine or VM, x86-64 or 64-bit ARM (a Raspberry Pi 4 or 5 with a 64-bit OS works). Its only trip to the internet is IPAM's weekly MAC vendor list.
-- **The servers (nodes):** Debian (13 is what it's tested on; a scanner also ran on Ubuntu 24.04) with a fixed address, a sudo account for setup, and Python 3.9 or newer. A VM with 2 cores and 1 GB of RAM is plenty: running BIND, Kea and chrony together uses about 330 MB.
+- **The servers (nodes):** Debian (13 is what it's tested on, x86-64 or 64-bit ARM: a Raspberry Pi 4 with Raspberry Pi OS Lite 64-bit ran DNS, DHCP failover and time; a scanner also ran on Ubuntu 24.04) with a fixed address, a sudo account for setup, and Python 3.9 or newer. A VM with 2 cores and 1 GB of RAM is plenty: running BIND, Kea and chrony together uses about 330 MB.
 - **Internet access on the servers:** they install BIND, Kea and chrony from Debian's APT repositories when you set up each module, so they need to reach them.
 - LiteBlox needs to reach each server on TCP 22 (setup) and TCP 8530 (the agent), and DNS servers on port 53. Your browser reaches LiteBlox on TCP 53530.
 

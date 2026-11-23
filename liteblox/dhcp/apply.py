@@ -88,9 +88,9 @@ def preview(conn, settings, node, **overrides):
     old = files_for(conn, nodes.get_node(conn, node['id']))
     new = files_for(conn, node, **overrides)
 
-    def shown(files, role):       # the review never shows a private key
+    def shown(files, role):       # the review never shows a private key or a TSIG secret
         text = files.get(role, '')
-        return f'(a private key, {len(text)} bytes)\n' if role == 'tls/ha.key' and text else text
+        return f'(a private key, {len(text)} bytes)\n' if role == 'tls/ha.key' and text else nodes.mask_secrets(text)
     diff = ''.join(''.join(difflib.unified_diff(shown(old, r).splitlines(True), shown(new, r).splitlines(True),
                                                 f'{node["name"]} {r} now', f'{node["name"]} {r} after'))
                    for r in dict.fromkeys(list(old) + list(new)))

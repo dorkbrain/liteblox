@@ -348,7 +348,7 @@ def node_dhcp(request: Request, node_id: int, user: User = Depends(current_user)
             if ctx['drift']:
                 now, ours = c.dhcp_files(), files_for(conn, node)
                 ctx['diff'] = ''.join(''.join(difflib.unified_diff(
-                    (ours[r] or '').splitlines(True), (now.get(r) or '').splitlines(True),
+                    service.mask_secrets(ours[r]).splitlines(True), service.mask_secrets(now.get(r)).splitlines(True),
                     f'{r} as LiteBlox wrote it', f'{r} on {node["name"]} now')) for r in ctx['drift'])
     except AgentError as e:
         ctx['error'] = e.message

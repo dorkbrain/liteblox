@@ -124,8 +124,10 @@ def set_dns_address(conn, node_id, address):
 
 
 def mask_secrets(conf_text):
-    """Hide key secrets in printed BIND config (agents before 1.0.1 send it unmasked)."""
-    return re.sub(r'(\bsecret\s+)"[^"]*"', r'\1"????????"', conf_text or '')
+    """Hide key secrets in config shown on a page: BIND's `secret "…";` (agents before 1.0.1 send it unmasked)
+    and Kea's JSON `"secret": "…"` (the TSIG keys in kea-dhcp-ddns.conf)."""
+    text = re.sub(r'(\bsecret\s+)"[^"]*"', r'\1"????????"', conf_text or '')
+    return re.sub(r'("secret"\s*:\s*)"[^"]*"', r'\1"????????"', text)
 
 
 def needs_repair(node):

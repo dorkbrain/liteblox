@@ -149,6 +149,25 @@ def test_a_reload_failure_puts_the_old_files_back(kea_client, kea_root, layout):
     assert restored.stat().st_gid == gid                    # Kea reads it through its group
 
 
+
+def test_a_reload_that_misses_a_new_interface_is_retried(kea_client, kea_root, layout):
+    # Kea started before the interface existed (a VLAN made later): config-reload refuses a subnet on it until Kea
+    # looks again, which config-set without the subnets' interface names makes it do
+    client, cfg = kea_client
+    _, sockets = kea_root
+    data = json.loads(render(KeaConfig(), layout)['kea-dhcp4.conf'])
+    data['Dhcp4']['interfaces-config']['interfaces'] = ['ens19']
+    data['Dhcp4']['subnet4'] = [{'id': 1, 'subnet': '192.0.2.0/24', 'interface': 'ens19'}]
+    text = json.dumps(data, indent=2)
+    sockets['dhcp4'].unknown_interface = 'ens19'
+    client.commit_dhcp(client.stage_dhcp({'kea-dhcp4.conf': text})['stage_id'])
+    commands = [c['command'] for c in sockets['dhcp4'].commands]
+    assert commands == ['config-reload', 'config-set', 'config-reload']
+    sent = sockets['dhcp4'].commands[1]['arguments']['Dhcp4']
+    assert 'interface' not in sent['subnet4'][0] and sent['interfaces-config']['interfaces'] == ['ens19']
+    assert (Path(cfg['kea_dir']) / 'kea-dhcp4.conf').read_text() == text          # the real file stays
+
+
 def test_kea_rejects_at_stage(kea_client, layout):
     client, cfg = kea_client
     data = json.loads(render(KeaConfig(), layout)['kea-dhcp4.conf'])

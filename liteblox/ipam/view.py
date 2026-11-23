@@ -130,6 +130,18 @@ def counts(facts, network):
     return out
 
 
+def first_free(facts, network):
+    """The lowest host address of the network that is Free with no name in DNS: nothing uses it on paper, and the
+    resolver's PTR lookup (rDNS) found no name for it either. None if there isn't one."""
+    lo, hi = int(network.hosts_range()[0]), int(network.hosts_range()[1])
+    taken = set(facts.used_between(lo, hi))
+    taken.update(int(ip) for ip, r in facts.rdns.items() if r.get('name') and lo <= int(ip) <= hi)
+    n = lo
+    while n in taken:
+        n += 1
+    return ipaddress.IPv4Address(n) if n <= hi else None
+
+
 def range_counts(facts, ranges):
     """[(range, used)] for the network's ranges."""
     return [(r, len(facts.used_between(int(r.first), int(r.last)))) for r in ranges]

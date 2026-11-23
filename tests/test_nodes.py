@@ -566,3 +566,55 @@ def test_setup_waits_for_another_apt_run(tmp_path, monkeypatch):
         bootstrap_mod.bootstrap(node, bootstrap_mod.Credentials('claude', password='pw'),
                                 bootstrap_mod.Options(dhcp=True), PKI(tmp_path / 'pki').ensure(),
                                 tmp_path / 'backups', '0.1.0', print, connect=LockedRemote)
+
+
+# ── the agent check at the end of bootstrap ─────────────────────────────────────
+
+class _Clock:
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, s):
+        self.now += s
+
+
+def _slow_agent(monkeypatch, answers_after):
+    """An agent that refuses connections until answers_after seconds have passed (a Pi after its apt run)."""
+    clock = _Clock()
+    monkeypatch.setattr(bootstrap_mod.time, 'monotonic', clock.monotonic)
+    monkeypatch.setattr(bootstrap_mod.time, 'sleep', clock.sleep)
+
+    class Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            if clock.now < answers_after:
+                raise bootstrap_mod.AgentError(None, 'cannot reach agent: [Errno 111] Connection refused')
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def status(self):
+            return {'bind': False, 'agent_version': '4.7.1'}
+    monkeypatch.setattr(bootstrap_mod, 'AgentClient', Client)
+    return clock
+
+
+def test_bootstrap_waits_for_a_slow_agent(monkeypatch):
+    _slow_agent(monkeypatch, answers_after=15)
+    lines = []
+    node = {'host': '192.0.2.9', 'agent_port': 8530}
+    bootstrap_mod._verify(node, None, lines.append)
+    assert any('waiting up to 90 s' in line for line in lines)
+
+
+def test_bootstrap_gives_up_on_an_agent_that_never_answers(monkeypatch):
+    clock = _slow_agent(monkeypatch, answers_after=10_000)
+    with pytest.raises(bootstrap_mod.BootstrapError, match='within 90 s'):
+        bootstrap_mod._verify({'host': '192.0.2.9', 'agent_port': 8530}, None, lambda line: None)
+    assert 90 <= clock.now < 92

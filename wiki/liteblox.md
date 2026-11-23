@@ -13,6 +13,21 @@ LiteBlox is an independent project, not affiliated with or endorsed by Infoblox.
 
 ## The story so far
 
+**4.7.2** (2026-11-23): **A Raspberry Pi as a node**
+- LiteBlox already ran on a Pi as the web console; now the Pi is proven as a node too. I booted a Pi 4B from a USB stick with Raspberry Pi OS Lite (64-bit) and let LiteBlox set it up over SSH with a password, the same as any new server: BIND, Kea and chrony installed and running on ARM.
+- To get it onto the lab's private DHCP network, the Proxmox bridge for that network now goes out to my switch as VLAN 100, and the Pi joins it on its one network port as a VLAN. That turned the lab network into a trunked one, still kept apart from the rest of my LAN.
+- On the Pi: a DNS secondary taking zone transfers, time served to the lab, IPAM seeing devices, an agent upgrade over mutual TLS, and Kea in a failover pair with an x86 VM, both ways round. I stopped Kea on the Pi and the VM took over within a minute; started again, the Pi was back in charge 21 seconds later with every lease.
+- The run found three things, fixed here: setup now waits long enough for the agent on a slow machine right after installing packages, the DHCP review no longer shows the DNS update key's secret, and a DHCP change on an interface made after Kea started (a new VLAN) now goes through instead of failing.
+- **First available** on an IPAM network page jumps to the lowest address that is free and has no name in DNS, and highlights it.
+- Next, 4.8: DHCP interface names per server (the Pi's VLAN had to be renamed to match the VM's), and a full Ubuntu Server node.
+
+**4.7.1** (2026-11-23): **Add DNS from IPAM**
+- I wanted to name a VM, `vm03`, in a static range, and IPAM only offered a DHCP reservation or an IPAM-only name, so I had to go to the zone's page for a real DNS record. Now every IPAM row with no name in DNS has **Add DNS…**: a name, a zone and a comment, and the A record and its PTR are added.
+- The zone starts as the one most of the network's names already live in, and the name as whatever IPAM, a reservation or a lease already calls the address.
+- In a static zone it publishes right away, or stays in the draft to look over on the zone's page first. In a dynamic zone (the one DHCP registers clients in) it goes out as a live update, so a setup with just one zone that takes DHCP names gets it too.
+- A name typed in this way is safe from DHCP: reclaiming stale DHCP names never removes it, and Kea won't hand it to a client asking for the same name. I checked that in the lab with a client asking for exactly that name.
+- My prod pulled this release from GitHub's registry; 4.6 came from my Forgejo, so both are proven.
+
 **4.7.0** (2026-11-23): **Public on GitHub**
 - LiteBlox is public at [github.com/dorkbrain/liteblox](https://github.com/dorkbrain/liteblox). Development stays in my own Forgejo; GitHub gets one commit per release, signed, with a release page holding the same downloads as the website.
 - The image is on GitHub's container registry, `ghcr.io/dorkbrain/liteblox`, for x86-64 and ARM64. Installing or upgrading is now a version on the `image:` line and `docker compose pull`; the image files stay on the website for machines without a registry.
