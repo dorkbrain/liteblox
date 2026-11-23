@@ -87,7 +87,21 @@ An **IPAM record** is a name kept in IPAM only, with an optional MAC and a comme
 - The address shows as **Named**, search finds it by address, name, MAC or comment, and next free counts it as used.
 - With a MAC, IPAM warns when the nodes see another device on the address.
 - An IPAM note already on the address becomes the record's comment.
+- **Name** links to [Add DNS…](#add-dns) for the address when a zone covers it.
 - **Assign** (the API, `lbcli.py reserve`) writes IPAM records when the DNS module is off, or when `target: "ipam"` (`--ipam`) is asked. A MAC in a DHCP subnet still makes a DHCP reservation; a MAC outside them stays on the IPAM record. **Unassign** removes them.
+
+### Add DNS
+
+**Add DNS…** in a row with no name in DNS yet (free, leased, seen, named in IPAM, or reserved without a name) adds an A record for the address, without going to the zone's page. It's offered with the DNS module on and a forward zone in LiteBlox, static or dynamic.
+- **Name**: short (`vm03`) for the zone you pick, or a full name in one of LiteBlox's zones, which then goes in that zone. It starts with the address's IPAM name, or its reservation's or lease's hostname.
+- **Zone**: the forward zones, the dynamic ones marked. It starts with the static zone most of the network's names are in (a dynamic one only when no static zone has names there).
+    - In a **static** zone the record goes into the draft.
+    - In a **dynamic** zone (one DHCP registers clients in, say) it's sent as an update and is live at once. DHCP leaves it alone: [reclaiming](/help/dynamic#stale-dhcp-names) only removes names Kea registered (the ones with a DHCID beside them), and Kea won't register a client over a name it didn't add.
+- **Comment**, saved on the A record; it starts with the address's IPAM or note comment.
+- **PTR**: also add the PTR in the reverse zone that covers the address, ticked when the zone has **Sync PTR records** on (its Settings). Off when no reverse zone in LiteBlox covers it.
+- **Then**, when a static zone holds the change (the zone itself, or the reverse zone for a dynamic zone's PTR): **Publish now** (a publish job; the notice links to it), or **Leave it in the draft**, to review and publish on the zone's page.
+
+It's the same record as one added on the zone's page: a name that already points elsewhere is allowed, with the zone page's warning, and the record isn't tied to IPAM afterwards (the zone is where it's changed or deleted). An IPAM record on the address stays until you remove it.
 
 **Move…** on a row that holds something (a name, a reservation or an IPAM record) gives the address a new one everywhere: see [Moving an address](/help/search#moving-an-address).
 

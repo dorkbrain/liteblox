@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.7.1 — 2026-11-23
+
+- IPAM: Add DNS… on an address row adds an A record (and its PTR) for the address in a zone you pick, without going to the zone page; offered on every row with no name in DNS yet
+- Static zones: Publish now (the notice links to its job) or leave it in the draft to review; dynamic zones (one DHCP registers clients in, say): sent as an update, live at once, so an install whose one zone takes DDNS gets it too
+- The zone starts as the static zone most of the network's names are in, and the name as the address's IPAM name or its reservation's or lease's hostname
+- A name added by hand has no DHCID, so reclaiming stale DHCP names never removes it and Kea won't register a client over it
+- No database changes; no agent upgrade needed
+
+
 ## 4.7.0 — 2026-11-23
 
 - GitHub: LiteBlox is public at github.com/dorkbrain/liteblox, one signed commit per release, and every release has a release page there with the downloads

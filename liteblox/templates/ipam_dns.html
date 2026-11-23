@@ -1,0 +1,50 @@
+{% extends 'ipam_base.html' %}
+{% from 'partials/ui.html' import action_bar %}
+{% block title %}Add DNS · {{ ip }} · IPAM · LiteBlox{% endblock %}
+{% block ipam %}
+<h1><a href="/ipam">IPAM</a>{% if network %} · <a href="/ipam/networks/{{ network.id }}?ip={{ ip }}">{{ network.label }}</a>{% endif %} · <code>{{ ip }}</code></h1>
+<p class="page-intro muted">Add an A record for this address to a zone{% if reverse %}, and its PTR to {{ reverse }}{% endif %}, the same as adding it on the zone's page.
+  <a href="/help/ipam#add-dns">More in Help</a>.</p>
+{% if names %}<p class="notice small">Already in DNS as {% for h in names %}<code>{{ h.rec.fqdn }}</code> ({{ h.zone }}){% if not loop.last %}, {% endif %}{% endfor %}: this adds another name.</p>{% endif %}
+<form method="post" action="/ipam/dns/{{ ip }}" class="settings card form-card"
+      x-data='{ zones: {{ zones|tojson }}, zone: {{ (form.zone or '')|tojson }}, ptr: {{ 'true' if form.ptr and reverse else 'false' }},
+                reverseStatic: {{ 'true' if reverse and not reverse_dynamic else 'false' }} }'>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="back" value="{{ back }}">
+  <div class="setting">
+    <label class="setting-name" for="name">Name</label>
+    <div class="setting-control"><input id="name" name="name" value="{{ form.name }}" maxlength="253" placeholder="e.g. vm03" autofocus required>
+      {% if errors.name %}<span class="error-text small">{{ errors.name }}</span>{% endif %}
+      <span class="muted small">A short name goes in the zone below; a full name in one of the zones goes in that zone.</span></div>
+  </div>
+  <div class="setting">
+    <label class="setting-name" for="zone">Zone</label>
+    <div class="setting-control"><select id="zone" name="zone" x-model="zone" @change="ptr = {{ 'true' if reverse else 'false' }} && zones[zone].auto_ptr">
+        {% for z, info in zones.items() %}<option value="{{ z }}"{% if z == form.zone %} selected{% endif %}>{{ z }}{% if info.dynamic %} (dynamic){% endif %}</option>{% endfor %}
+      </select>
+      {% if errors.zone %}<span class="error-text small">{{ errors.zone }}</span>{% endif %}
+      <span class="muted small" x-show="!zones[zone]?.dynamic">A static zone: the record goes into its draft.</span>
+      <span class="muted small" x-show="zones[zone]?.dynamic" x-cloak>A dynamic zone: the record is sent as an update and is live at once. DHCP never removes a name added here.</span></div>
+  </div>
+  <div class="setting">
+    <label class="setting-name" for="comment">Comment</label>
+    <div class="setting-control"><input id="comment" name="comment" value="{{ form.comment }}" maxlength="200">
+      {% if errors.comment %}<span class="error-text small">{{ errors.comment }}</span>{% endif %}
+      <span class="muted small">Saved on the A record.</span></div>
+  </div>
+  <div class="setting">
+    <span class="setting-name">PTR</span>
+    <div class="setting-control">
+      <label class="check"><input type="checkbox" name="ptr" value="1" x-model="ptr" {% if not reverse %}disabled{% elif form.ptr %}checked{% endif %}>
+        <span>Add the PTR record{% if reverse %} in {{ reverse }}{% endif %}</span></label>
+      {% if not reverse %}<span class="muted small">No reverse zone in LiteBlox covers this address.</span>
+      {% else %}<span class="muted small">Ticked when the zone has Sync PTR records on.</span>{% endif %}</div>
+  </div>
+  <div class="setting" x-show="!zones[zone]?.dynamic || (ptr && reverseStatic)">
+    <span class="setting-name">Then</span>
+    <div class="setting-control">
+      <label class="check"><input type="radio" name="publish" value="now" {% if form.publish != 'draft' %}checked{% endif %}><span>Publish now</span></label>
+      <label class="check"><input type="radio" name="publish" value="draft" {% if form.publish == 'draft' %}checked{% endif %}><span x-text="zones[zone]?.dynamic ? 'Leave the PTR in the draft of {{ reverse }}, to review and publish there' : 'Leave it in the draft, to review and publish on the zone\'s page'">Leave it in the draft, to review and publish on the zone's page</span></label></div>
+  </div>
+  {% call action_bar(cancel=back) %}<button type="submit">Add</button>{% endcall %}
+</form>
+{% endblock %}

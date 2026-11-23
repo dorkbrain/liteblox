@@ -82,6 +82,7 @@
         {%- if a.names or r or a.ipam %} · <a href="/addresses/{{ a.ip }}/move?back={{ name_back|urlencode }}" title="give its names, PTR, reservation and IPAM entry a new address">Move…</a>{% endif %}
         {%- if a.ipam %} · <a href="/ipam/names/{{ a.ip }}?back={{ name_back|urlencode }}">Name</a>
         {%- elif a.nameable and not a.names and not r %} · <a href="/ipam/names/{{ a.ip }}?back={{ name_back|urlencode }}" title="a name kept in IPAM only">Name…</a>{% endif %}
+        {%- if add_dns and not a.names %} · <a href="/ipam/dns/{{ a.ip }}?back={{ name_back|urlencode }}" title="an A record (and its PTR) in a zone you pick">Add DNS…</a>{% endif %}
         {%- if a.state == 'free' %}
         {%- if a.subnet %} · <a href="/dhcp/subnets/{{ a.subnet.id }}/reservations/new?ip={{ a.ip }}">Reserve…</a>{% endif %}
         {%- if probe_nodes %} · <button type="button" class="link small" hx-post="/ipam/check" hx-vals='{"ip": "{{ a.ip }}"}' hx-swap="outerHTML" title="ping it once and read the node's neighbour table">Check</button>{% endif %}

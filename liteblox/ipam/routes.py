@@ -24,11 +24,12 @@ def _settings(request):
 
 
 def _back(url, **params):
-    params = {k: v for k, v in params.items() if v}
-    if not params:
+    """A redirect to url with params added (a list value repeats its key)."""
+    pairs = [(k, x) for k, v in params.items() for x in (v if isinstance(v, (list, tuple)) else [v]) if x]
+    if not pairs:
         return RedirectResponse(url, status_code=303)
     url, hash_, fragment = url.partition('#')
-    return RedirectResponse(url + ('&' if '?' in url else '?') + '&'.join(f'{k}={quote(str(v))}' for k, v in params.items())
+    return RedirectResponse(url + ('&' if '?' in url else '?') + '&'.join(f'{k}={quote(str(v))}' for k, v in pairs)
                             + hash_ + fragment, status_code=303)
 
 
@@ -53,6 +54,11 @@ def _network(found, network_id):
     if n is None:
         raise HTTPException(status_code=404, detail='no such network')
     return n
+
+
+def _dns_on(request):
+    from ..modules import for_request
+    return for_request(request)['dns']
 
 
 def _node_on(conn, ip):
@@ -140,6 +146,7 @@ def network_page(request: Request, network_id: int, user: User = Depends(current
         'rows': [r for r in page_rows if r['state'] != 'free'] if used_only else page_rows, 'used_only': used_only,
         'highlight': highlight, 'probe_nodes': _nodes_on(conn, network), 'kinds': model.KINDS,
         'record_link': search.record_link, 'now': int(time.time()), 'resolver': ptr.config(conn)[0],
+        'add_dns': user.is_admin and _dns_on(request) and bool(_forward_zones(conn)),
         'flapping': [f for f in seen.flapping(conn) if ipaddress.IPv4Address(f['ip']) in network.net],
     })
     return templates.TemplateResponse(request, 'ipam_network.html', ctx)
@@ -415,6 +422,177 @@ async def name_delete(request: Request, ip: str, user: User = Depends(require_ad
         raise HTTPException(status_code=404, detail='no IPAM name at this address')
     audit(conn, user.username, 'ipam_name_delete', f"{ip}: {r['name']}")
     return _back(_name_back(form.get('back'), ip), done=f"{ip}'s IPAM name {r['name']} is removed.")
+
+
+# ── Add DNS: an A record (and its PTR) from an IPAM row ────────────────────────
+
+def _forward_zones(conn):
+    """{name: {auto_ptr, dynamic}} of the forward zones an A record can go in (static and dynamic), by name."""
+    return {r['name']: {'auto_ptr': bool(r['auto_ptr']), 'dynamic': bool(r['dynamic'])} for r in conn.execute(
+        "SELECT name, auto_ptr, dynamic FROM zones WHERE kind = 'primary' AND name NOT LIKE '%.arpa' ORDER BY name")}
+
+
+def _zone_of(conn, name):
+    """The zone LiteBlox holds that name is in (the longest match, dynamic and forwarding zones too), or None."""
+    name = name.rstrip('.').lower()
+    found = [r['name'] for r in conn.execute('SELECT name FROM zones')
+             if name == r['name'] or name.endswith('.' + r['name'])]
+    return max(found, key=len) if found else None
+
+
+def _reverse_for(conn, ip):
+    """(name, dynamic) of the reverse zone in LiteBlox that covers ip, or (None, False)."""
+    from ..dns import ptr as dns_ptr
+    found = {r['name']: bool(r['dynamic']) for r in conn.execute(
+        "SELECT name, dynamic FROM zones WHERE kind = 'primary' AND name LIKE '%.in-addr.arpa'")}
+    name = dns_ptr.reverse_zone_for(ip, list(found))
+    return name, found.get(name, False)
+
+
+def _likely_zone(conn, facts, network, zones, subnet):
+    """The static zone most A records in the address's network are in; else the dynamic one; else the zone its
+    DHCP subnet's names end in; else the first static zone, or the first."""
+    counts = {}
+    if network is not None:
+        lo, hi = int(network.net.network_address), int(network.net.broadcast_address)
+        for n in facts.used_between(lo, hi):
+            for h in facts.names.get(ipaddress.IPv4Address(n), []):
+                if h['zone'] in zones:
+                    counts[h['zone']] = counts.get(h['zone'], 0) + 1
+    for dynamic in (False, True):       # a hand-made name usually belongs with the other hand-made ones
+        mine = {z: n for z, n in counts.items() if zones[z]['dynamic'] == dynamic}
+        if mine:
+            return max(sorted(mine), key=mine.get)
+    found = _zone_of(conn, subnet.qualifying_suffix) if subnet and subnet.qualifying_suffix else None
+    if found in zones:
+        return found
+    return next((z for z, info in zones.items() if not info['dynamic']), next(iter(zones)))
+
+
+def _suggested_name(conn, facts, ip, zones):
+    """The address's IPAM name, else its reservation's or lease's hostname: kept in full when it's in one of
+    zones, else its first label."""
+    address = ipaddress.IPv4Address(ip)
+    record = facts.ipam.get(address)
+    held = facts.reservations.get(address)
+    lease = facts.leases.get(address, (None, None))[1]
+    name = ((record or {}).get('name') or (held[0][1].hostname if held else '') or
+            (lease or {}).get('hostname') or '').rstrip('.').lower()
+    if not name or _zone_of(conn, name) in zones:
+        return name
+    return name.split('.')[0]
+
+
+def _dns_zones(request, conn):
+    """The forward zones (_forward_zones); 404 with the DNS module off or none of them."""
+    if not _dns_on(request):
+        raise HTTPException(status_code=404, detail='the DNS module is off')
+    zones = _forward_zones(conn)
+    if not zones:
+        raise HTTPException(status_code=404, detail='no forward zone in LiteBlox to add a record to')
+    return zones
+
+
+def _dns_page(request, conn, user, ip, form=None, errors=None, error=None, status_code=200):
+    zones = _dns_zones(request, conn)
+    ctx = _context(request, conn, user)
+    facts = ctx['facts']
+    address = ipaddress.IPv4Address(ip)
+    network = model.leaf_for(ctx['networks'], address)
+    reverse, reverse_dynamic = _reverse_for(conn, ip)
+    if form is None:
+        zone = _likely_zone(conn, facts, network, zones, facts.subnet_for(address))
+        record = facts.ipam.get(address)
+        form = {'name': _suggested_name(conn, facts, ip, zones), 'zone': zone, 'publish': 'now',
+                'comment': (record or {}).get('comment') or model.notes(conn).get(ip, ''),
+                'ptr': '1' if zones[zone]['auto_ptr'] else ''}
+    ctx.update({'ip': ip, 'network': network, 'zones': zones, 'reverse': reverse, 'reverse_dynamic': reverse_dynamic,
+                'form': form,
+                'names': facts.names.get(address, []), 'errors': errors or {}, 'error': error,
+                'back': _name_back(request.query_params.get('back') or form.get('back'), ip)})
+    return templates.TemplateResponse(request, 'ipam_dns.html', ctx, status_code=status_code)
+
+
+@router.get('/ipam/dns/{ip}')
+def dns_page(request: Request, ip: str, user: User = Depends(require_admin), conn=Depends(get_db)):
+    return _dns_page(request, conn, user, _ip_or_400(ip))
+
+
+@router.post('/ipam/dns/{ip}')
+async def dns_save(request: Request, ip: str, user: User = Depends(require_admin), conn=Depends(get_db)):
+    """The A record goes in as the zone page would add it (with its PTR when ticked): into a static zone's draft,
+    then published or left there to review; into a dynamic zone at once, as an update. A PTR that lands in a
+    static reverse zone's draft is published or left the same way."""
+    from ..dns import dynamic, editing
+    from ..dns.records import RecordError
+    from . import assign
+    from .names import clean_name
+    ip = _ip_or_400(ip)
+    form = {k: v for k, v in (await request.form()).items() if isinstance(v, str)}
+    zones = _dns_zones(request, conn)
+    raw = (form.get('name') or '').strip().lower()
+    try:
+        name = clean_name(raw)
+    except model.IpamError as e:
+        return _dns_page(request, conn, user, ip, form, e.errors, status_code=422)
+    zone = _zone_of(conn, name) if '.' in name or raw.endswith('.') else None
+    if zone is not None and zone not in zones:
+        return _dns_page(request, conn, user, ip, form, {'name': f'{zone} is a forwarding or reverse zone: an A '
+                                                                  'record for it goes elsewhere'}, status_code=422)
+    if zone is None:
+        if raw.endswith('.'):
+            return _dns_page(request, conn, user, ip, form,
+                             {'name': f"{name} isn't in a zone in LiteBlox"}, status_code=422)
+        zone = (form.get('zone') or '').strip().lower()
+        if zone not in zones:
+            return _dns_page(request, conn, user, ip, form, {'zone': 'pick a zone'}, status_code=422)
+        name = f'{name}.{zone}'
+    fqdn = name.rstrip('.')
+    reverse, reverse_dynamic = _reverse_for(conn, ip)
+    ptr_on = bool(form.get('ptr')) and reverse is not None
+    comment = (form.get('comment') or '').strip()
+    live = zones[zone]['dynamic']
+    with editing.zone_lock(zone):
+        try:
+            edit = editing.ZoneEdit(_settings(request), conn, zone)
+            if edit.zone is None:
+                return _dns_page(request, conn, user, ip, form, status_code=409,
+                                 error=f"{zone} doesn't parse: fix it on its Raw tab first")
+            notes, warnings, _ = editing.apply_row(edit, None, fqdn + '.', None, 'A', ip, comment or None, ptr_on,
+                                                   None, user.username)
+        except RecordError as e:
+            errors = dict(e.errors)
+            # the form has one Name field: the record's other fields' errors are about the name too
+            message = '; '.join(errors.pop(k) for k in list(errors) if k not in ('comment',))
+            return _dns_page(request, conn, user, ip, form, {'name': message, **errors} if message else errors,
+                             status_code=422)
+        except dynamic.DynamicError as e:
+            return _dns_page(request, conn, user, ip, form, status_code=409,
+                             error=f'Nothing was added: the update to {zone} failed ({e})')
+    audit(conn, user.username, 'record_add', f'{zone}: {fqdn} A {ip} (from IPAM)')
+    back = _name_back(form.get('back'), ip)
+
+    def sentences(first, *notes):
+        # the first starts with a host name, kept as it is; the notes start as sentences
+        return ' '.join(p + ('' if p.endswith('.') else '.') for p in [first, *(n[:1].upper() + n[1:] for n in notes)])
+    # the static zones holding this change: the zone's draft, or (from a dynamic zone) the reverse zone's
+    drafted = [zone] if not live else [reverse] if ptr_on and not reverse_dynamic else []
+    added = f'{fqdn} → {ip} is live in {zone}' if live else f'{fqdn} → {ip} is added'
+    if not drafted:
+        return _back(back, done=sentences(added, *notes), warning=warnings)
+    if form.get('publish') == 'draft':
+        first = (f'{added}; its PTR is in the draft of {reverse}: review and publish it there' if live else
+                 f'{fqdn} → {ip} is in the draft of {zone}: review and publish it there')
+        return _back(back, done=sentences(first, *(n for n in notes if 'is a draft in' not in n)), warning=warnings)
+    started, more = assign._publish(_settings(request), conn, set(drafted), user.username, '',
+                                    f'{fqdn} → {ip} (from IPAM)')
+    if live:
+        added += '; publishing its PTR in ' + reverse if started else ''
+        notes = [n for n in notes if not (started and 'is a draft in' in n)]
+    else:
+        added += '; publishing it now' if started else ' to the draft'
+        notes = assign._published(notes, drafted) if started else notes
+    return _back(back, done=sentences(added, *notes), warning=warnings + more, job=started[0] if started else None)
 
 
 # ── what the nodes see ─────────────────────────────────────────────────────────

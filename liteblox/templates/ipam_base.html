@@ -55,7 +55,7 @@
     {% endif %}
     {% for e in errors %}<p class="notice small">{{ e }}</p>{% endfor %}
     {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
-    {% if done %}<p class="notice">{{ done }}</p>{% endif %}
+    {% if done %}<p class="notice">{{ done }}{% set job = request.query_params.get('job', '') %}{% if job.isdigit() %} <a href="/jobs/{{ job }}">Its job</a>{% endif %}</p>{% endif %}
     {% block ipam %}{% endblock %}
   </div>
 </div>

@@ -13,6 +13,12 @@ LiteBlox is an independent project, not affiliated with or endorsed by Infoblox.
 
 ## The story so far
 
+**4.7.0** (2026-11-23): **Public on GitHub**
+- LiteBlox is public at [github.com/dorkbrain/liteblox](https://github.com/dorkbrain/liteblox). Development stays in my own Forgejo; GitHub gets one commit per release, signed, with a release page holding the same downloads as the website.
+- The image is on GitHub's container registry, `ghcr.io/dorkbrain/liteblox`, for x86-64 and ARM64. Installing or upgrading is now a version on the `image:` line and `docker compose pull`; the image files stay on the website for machines without a registry.
+- Before anything leaves, the release step checks the source for my private host names and addresses and for files git doesn't track. On the very first run it caught two of my own tests that used a host name as a sample, so 4.7.0 went out without them.
+- Nothing changed in the app itself.
+
 **4.6.1** (2026-11-22): **ARM64, and a new home for the images**
 - LiteBlox is now built for 64-bit ARM as well as x86-64, so a Raspberry Pi 4 or 5 with a 64-bit OS can run the web console. The image in the registry covers both, and docker pulls the right one by itself.
 - The downloads now come as one image file per processor type, `-amd64` and `-arm64`. Both load under the same name, so the install steps don't change. `uname -m` tells you which one you need.

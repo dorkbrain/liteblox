@@ -6,7 +6,7 @@
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 <p class="page-intro muted">{% if record %}This address's name is kept in IPAM only.{% else %}Give this address a name kept in IPAM only.{% endif %}
   It shows as <span class="pill s-named">Named</span> on its network and search finds it; nothing goes to DNS or DHCP.
-  {%- if dns_on and not nameable %} A zone in LiteBlox covers this address: an A record there is usually the better home for its name.{% endif %}
+  {%- if dns_on and not nameable %} A zone in LiteBlox covers this address: an A record there is usually the better home for its name (<a href="/ipam/dns/{{ ip }}?back={{ back|urlencode }}">Add DNS…</a>).{% endif %}
   <a href="/help/ipam#ipam-records">More in Help</a>.</p>
 <form method="post" action="/ipam/names/{{ ip }}" class="settings card form-card">
   <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="back" value="{{ back }}">

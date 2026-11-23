@@ -5,7 +5,8 @@
 {% macro more(g) %}{% if g.cut %}<p class="muted small">Showing the first {{ g.hits|length }} of {{ g.count }}: narrow the search to see the rest.</p>{% endif %}{% endmacro %}
 {% block content %}
 <div class="heading"><h1>Search</h1></div>
-{% if request.query_params.get('done') %}<p class="notice">{{ request.query_params.get('done') }}</p>{% endif %}
+{% if request.query_params.get('done') %}<p class="notice">{{ request.query_params.get('done') }}{% set job = request.query_params.get('job', '') %}{% if job.isdigit() %} <a href="/jobs/{{ job }}">Its job</a>{% endif %}</p>{% endif %}
+{% for w in request.query_params.getlist('warning') %}<p class="notice small">{{ w }}</p>{% endfor %}
 <form method="get" action="/search" class="inline-actions search-form">
   <input type="search" name="q" id="search-box" value="{{ q }}" placeholder="A name, an address, a network or a MAC" aria-label="Search" autofocus>
   <button type="submit">Search</button>
