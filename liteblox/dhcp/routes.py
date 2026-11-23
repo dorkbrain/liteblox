@@ -22,7 +22,8 @@ from ..templating import templates
 from . import apply, ops, store, validate
 from . import leases as lease_mod
 from .model import (DDNS_MODES, LIFETIMES, Dhcp4Settings, HaPair, Reservation, Subnet, dns_primary,
-                    dynamic_reverse_zones, ha_pair, interfaces_of, settings as load_settings, subnets as load_subnets)
+                    dynamic_reverse_zones, ha_pair, interfaces_of, serves, settings as load_settings,
+                    subnets as load_subnets)
 from .render import derived_reverse_zones, reverse_zones_for, subnet_reverse_zones
 
 router = APIRouter()
@@ -41,8 +42,11 @@ def _serving(conn):
 
 
 def _placements(request, conn):
-    """(served, not served yet): the DHCP nodes' live interfaces a subnet may go on."""
-    found = ops.dhcp_interfaces(_settings(request), conn)
+    """(served, not served yet): the DHCP nodes' live interfaces a subnet may go on. A pair's standby is left out:
+    subnets carry the primary's interface names, and the standby's own are matched to them by network."""
+    pair = ha_pair(conn)
+    found = [i for i in ops.dhcp_interfaces(_settings(request), conn)
+             if not (pair.active and i.get('node_id') == pair.standby_id)]
     return [i for i in found if i['served']], [i for i in found if not i['served']]
 
 
@@ -265,7 +269,10 @@ def overview(request: Request, user: User = Depends(current_user), conn=Depends(
                      if ':' not in a]
         servers.append({'node': n, 'status': status, 'error': error, 'served': interfaces_of(n),
                         'own': {n['host'], node_address(n)}, 'role': pair.role_of(n['id']), 'ha': ha,
-                        'addresses': addresses})
+                        'addresses': addresses,
+                        # a standby's own interface name: the primary's it stands in for, where they differ
+                        'stands_for': {v: k for k, v in pair.interface_map.items()}
+                        if pair.role_of(n['id']) == 'standby' else {}})
     serving = {n['id'] for n in _serving(conn)}
     counts, _ = lease_mod.counts(_settings(request), conn)
     return templates.TemplateResponse(request, 'dhcp.html', {
@@ -277,26 +284,57 @@ def overview(request: Request, user: User = Depends(current_user), conn=Depends(
 
 
 def _interfaces_change(request, conn, node, form):
+    """(chosen names, errors, the pair's new interface map or None)."""
     chosen = sorted(set(form.getlist('interfaces')))
     status, error = _status(request, node)
     if error:
-        return chosen, {'interfaces': f"{node['name']} is unreachable: {error}"}
+        return chosen, {'interfaces': f"{node['name']} is unreachable: {error}"}, None
     pair = ha_pair(conn)
     if pair.role_of(node['id']) == 'standby':
         return chosen, {'interfaces': f'{node["name"]} is the standby: it serves what {pair.primary_name} serves; '
-                                      f'change the interfaces on {pair.primary_name}'}
+                                      f'change the interfaces on {pair.primary_name}'}, None
     others = [n for n in _serving(conn) if n['id'] not in (node['id'], pair.partner_of(node['id']))]
-    return chosen, validate.check_interfaces(node, chosen, status.get('interfaces'), others)
+    errors = validate.check_interfaces(node, chosen, status.get('interfaces'), others)
+    mapping = None
+    if pair.active and not errors:
+        # the standby serves the same networks under its own names
+        standby = nodes.get_node(conn, pair.standby_id)
+        theirs, error = _status(request, standby)
+        if error:
+            return chosen, {'interfaces': f"{standby['name']} (the standby) is unreachable: {error}"}, None
+        mapping, problem = validate.match_interfaces(node, standby, status.get('interfaces'),
+                                                     theirs.get('interfaces'), chosen)
+        if problem:
+            errors['interfaces'] = problem
+    return chosen, errors, mapping
+
+
+def _with_map(pair, mapping):
+    """The pair as it will be with `mapping` (for previews)."""
+    from dataclasses import replace
+    return replace(pair, interface_map={k: v for k, v in (mapping or {}).items() if k != v})
+
+
+def _map_note(pair, mapping):
+    differ = {k: v for k, v in (mapping or {}).items() if k != v}
+    if not differ:
+        return None
+    return (f'{pair.standby_name} serves ' + ', '.join(f"{v} for {pair.primary_name}'s {k}" for k, v in sorted(differ.items()))
+            + ' (matched by network)')
 
 
 @router.post('/dhcp/nodes/{node_id}/interfaces/preview')
 async def interfaces_preview(request: Request, node_id: int, user: User = Depends(require_admin),
                              conn=Depends(get_db)):
     node = _dhcp_node(conn, node_id)
-    chosen, errors = _interfaces_change(request, conn, node, await request.form())
+    chosen, errors, mapping = _interfaces_change(request, conn, node, await request.form())
     if errors:
         return _review(request, [], '; '.join(errors.values()))
     results = _previews(request, conn, [node], interfaces=chosen)
+    pair = ha_pair(conn)
+    if mapping is not None:
+        standby = nodes.get_node(conn, pair.standby_id)
+        results += [apply.preview(conn, _settings(request), standby, pair=_with_map(pair, mapping), interfaces=chosen)]
     notes = []
     for s in load_subnets(conn):
         was, now = s.interface in interfaces_of(node), s.interface in chosen
@@ -306,6 +344,9 @@ async def interfaces_preview(request: Request, node_id: int, user: User = Depend
             count = len(s.reservations)
             notes.append(f"Kea starts answering for {s.prefix} on {s.interface} (pools {', '.join(s.pools)}; "
                          f"{count} reservation{'' if count == 1 else 's'})")
+    note = _map_note(pair, mapping) if mapping is not None else None
+    if note:
+        notes.append(note)
     if notes:
         results[0]['notes'] = notes
     return _review(request, results, label=f"Serve on {', '.join(chosen) or 'no interface'}")
@@ -314,7 +355,7 @@ async def interfaces_preview(request: Request, node_id: int, user: User = Depend
 @router.post('/dhcp/nodes/{node_id}/interfaces')
 async def interfaces_apply(request: Request, node_id: int, user: User = Depends(require_admin), conn=Depends(get_db)):
     node = _dhcp_node(conn, node_id)
-    chosen, errors = _interfaces_change(request, conn, node, await request.form())
+    chosen, errors, mapping = _interfaces_change(request, conn, node, await request.form())
     if errors:
         return RedirectResponse(f"/dhcp?error={quote('; '.join(errors.values()))}", status_code=303)
     snap = store.snapshot(conn)
@@ -322,8 +363,10 @@ async def interfaces_apply(request: Request, node_id: int, user: User = Depends(
     targets = [node['id']] + ([partner] if partner else [])
 
     def change(c):
-        for i in targets:
-            store.set_interfaces(c, i, chosen)
+        store.set_interfaces(c, node['id'], chosen)
+        if partner:
+            store.set_interface_map(c, mapping)
+            store.set_interfaces(c, partner, [(mapping or {}).get(n, n) for n in chosen])
     job_id = apply.start(_settings(request), targets, f"serve DHCP on {', '.join(chosen) or 'no interface'}",
                          user.username, change=change, undo=lambda c: store.restore(c, snap), node_id=node['id'])
     return RedirectResponse(f'/jobs/{job_id}', status_code=303)
@@ -371,10 +414,11 @@ def subnet_overview(request: Request, subnet_id: int, user: User = Depends(curre
     in_pool = stats.latest(conn, 'leases_in_pool', subnet_id=s.id)
     graphs = [(label, hours, stats.spark(stats.series(conn, 'leases_active', subnet_id=s.id, hours=hours), hours=hours))
               for label, hours in (('last day', 24), ('last week', 7 * 24))]
+    pair = ha_pair(conn)
     return templates.TemplateResponse(request, 'dhcp_subnet.html', {
         'user': user, 'subnet': s, 'tab': 'overview', 'size': size, 'active': active, 'in_pool': in_pool,
         'pct': 100.0 * in_pool / size if size and in_pool is not None else None, 'graphs': graphs,
-        'servers': [n for n in _serving(conn) if s.interface in interfaces_of(n)], 'pair': ha_pair(conn),
+        'servers': [n for n in _serving(conn) if serves(pair, n, s)], 'pair': pair,
         'ddns': ddns_summary(conn, s), 'globals': load_settings(conn)})
 
 
@@ -768,12 +812,26 @@ def _pair_change(request, conn, form):
     served = interfaces_of(primary) if primary else []
     errors = validate.check_pair(primary, standby, values['primary_address'], values['standby_address'], port,
                                  live, served)
+    if not errors:
+        values['interface_map'], _ = validate.match_interfaces(primary, standby, live.get(primary['id']),
+                                                               live.get(standby['id']), served)
     return primary, standby, values, errors
 
 
 def _pair_of(primary, standby, values):
     return HaPair(primary['id'], standby['id'], primary['name'], standby['name'], values['primary_address'],
-                  values['standby_address'], values['port'])
+                  values['standby_address'], values['port'],
+                  {k: v for k, v in (values.get('interface_map') or {}).items() if k != v})
+
+
+def _subnets_for_pair(conn, primary_id):
+    """The subnets as they'll be once `primary_id` is the primary: renamed to its interface names when it's the
+    current standby (store.set_pair does the same)."""
+    from dataclasses import replace
+    old, subnets = ha_pair(conn), load_subnets(conn)
+    if old.active and primary_id == old.standby_id:
+        subnets = [replace(x, interface=old.standby_name_for(x.interface)) for x in subnets]
+    return subnets
 
 
 @router.post('/dhcp/ha/preview')
@@ -791,7 +849,16 @@ async def pair_preview(request: Request, user: User = Depends(require_admin), co
         row = {**dict(n), 'kea_tls': json.dumps({'address': address, 'cert': cert.decode(), 'key': key.decode(),
                                                  'ca': pki.ca_pem().decode()})}
         served = interfaces_of(primary)
-        results.append(apply.preview(conn, _settings(request), row, pair=pair, interfaces=served))
+        results.append(apply.preview(conn, _settings(request), row, pair=pair, interfaces=served,
+                                     subnet_list=_subnets_for_pair(conn, primary['id'])))
+    for gone in store.leaving_pair(ha_pair(conn), primary['id'], standby['id']):
+        row = nodes.get_node(conn, gone)
+        results.insert(0, apply.preview(conn, _settings(request), row, pair=pair, interfaces=[]))
+        results[0]['notes'] = [f"{row['name']} leaves the pair and serves nothing"]
+    note = _map_note(pair, values.get('interface_map'))
+    if note:        # on the standby's review (it follows any node leaving the pair)
+        standby_result = results[-2]
+        standby_result['notes'] = [*standby_result.get('notes', []), note]
     return _review(request, results, label=f"Pair {primary['name']} (primary) with {standby['name']} (standby)")
 
 
@@ -803,10 +870,12 @@ async def pair_apply(request: Request, user: User = Depends(require_admin), conn
         return RedirectResponse(f"/dhcp?error={quote('; '.join(errors.values()))}", status_code=303)
     snap = store.snapshot(conn)
     pki = PKI(_settings(request).pki_dir)
-    job_id = apply.start(_settings(request), [standby['id'], primary['id']],
+    gone = store.leaving_pair(ha_pair(conn), primary['id'], standby['id'])     # stops serving first
+    job_id = apply.start(_settings(request), [*gone, standby['id'], primary['id']],
                          f"pair {primary['name']} (primary) with {standby['name']} (standby)", user.username,
                          change=lambda c: store.set_pair(c, pki, primary['id'], standby['id'], values['primary_address'],
-                                                         values['standby_address'], values['port']),
+                                                         values['standby_address'], values['port'],
+                                                         values.get('interface_map')),
                          undo=lambda c: store.restore(c, snap))
     return RedirectResponse(f'/jobs/{job_id}', status_code=303)
 

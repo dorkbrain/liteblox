@@ -7,6 +7,7 @@ the job so the wizard can stream it.
 
 import json
 import posixpath
+import re
 import shlex
 import time
 from dataclasses import dataclass, replace
@@ -235,6 +236,14 @@ def _preflight(r, options, log):
     log('  named-checkconf: ok')
 
 
+MISSING_PACKAGE = re.compile(r"Unable to locate package (\S+)|Package '?([^\s']+)'? has no installation candidate")
+
+
+def missing_packages(output):
+    """The packages apt-get couldn't find in the node's package sources, from its errors."""
+    return sorted({a or b for a, b in MISSING_PACKAGE.findall(output or '')})
+
+
 def _apt(r, packages, log, update=True):
     """apt-get install, waiting while another apt run holds its lock. DPkg::Lock::Timeout covers dpkg's
     lock; apt-get update's lists lock has no such option, hence the retries."""
@@ -244,6 +253,13 @@ def _apt(r, packages, log, update=True):
         try:
             return r.run(cmd, sudo=True, label=f'apt-get install {packages.split()[0]}', timeout=APT_LOCK_WAIT + 600)
         except RemoteError as e:
+            missing = missing_packages(e.output)
+            if missing:
+                one = len(missing) == 1
+                raise BootstrapError(
+                    f"{', '.join(missing)} {'is' if one else 'are'} not in this node's package sources (apt has no "
+                    f"candidate for {'it' if one else 'them'}): enable the repository that has "
+                    f"{'it' if one else 'them'} (on Ubuntu before 23.04, universe has Kea), then run this again")
             if 'Could not get lock' not in e.output or waited >= APT_LOCK_WAIT:
                 raise
         if not waited:
@@ -289,6 +305,12 @@ def ping_range(current, gid):
     if lo <= gid <= hi:
         return None
     return f'{min(lo, gid)} {max(hi, gid)}' if lo <= hi else f'{gid} {gid}'
+
+
+def kea_too_old(version):
+    """Is `kea-dhcp4 -v`'s version below 2.4 (Ubuntu 24.04's; Debian 13 has 2.6)?"""
+    m = re.match(r'\s*(\d+)\.(\d+)', version or '')
+    return bool(m) and (int(m.group(1)), int(m.group(2))) < (2, 4)
 
 
 def _ping_group(r, log):
@@ -346,6 +368,8 @@ def _kea(r, node, options, log):
         _apt(r, KEA_PACKAGES, log)
     _, version = r.run('/usr/sbin/kea-dhcp4 -v', check=False)
     log(f'  Kea: {version}')
+    if kea_too_old(version):
+        log(f'  ⚠ Kea {version.strip()} is older than LiteBlox is tested with (2.4 and 2.6): DHCP may not work')
     _, hooks = r.run('ls -d /usr/lib/*/kea/hooks 2>/dev/null | head -1', check=False)
     hooks = hooks.strip() or '/usr/lib/kea/hooks'
     # setgid: every file written there (the agent's, a rollback's) stays readable for Kea's group
@@ -359,8 +383,12 @@ def _kea(r, node, options, log):
     files = None
     # sudo: /etc/kea is 0770 _kea, so the SSH account itself can't read it; a config LiteBlox wrote is kept
     code, _ = r.run(f"grep -qs '\"generated-by\": \"LiteBlox\"' {KEA_DIR}/kea-dhcp4.conf", sudo=True, check=False)
+    if code == 0 and not _kea_accepts(r):
+        # kept only if this Kea reads it: an earlier run's config may not suit the Kea installed now
+        log("  the Kea config LiteBlox wrote before doesn't pass this Kea's check: writing a fresh one")
+        code = 1
     if code != 0:
-        layout = kea_model.KeaLayout(hooks_dir=hooks)
+        layout = kea_model.KeaLayout(hooks_dir=hooks, kea_version=version.strip() or None)
         files = render(kea_model.for_node(None, node), layout)
         units.update({role: text.encode() for role, text in files.items()})
     tmp = r.upload(units)
@@ -392,9 +420,16 @@ def _kea(r, node, options, log):
                            check=False)
         raise BootstrapError(f'Kea did not start ({out}):\n{journal}')
     log('  kea-dhcp4 and kea-dhcp-ddns are running')
-    node['dhcp_setup'] = {'dhcp': 1, 'kea_hooks_dir': hooks, **(
+    node['dhcp_setup'] = {'dhcp': 1, 'kea_hooks_dir': hooks, 'kea_version': version.strip() or None, **(
         {'dhcp_files': json.dumps(file_hashes(files)), 'dhcp_drift': None} if files else {})}
     return True
+
+
+def _kea_accepts(r):
+    """Does the node's Kea accept the configs in /etc/kea (kea-dhcp4 -t and kea-dhcp-ddns -t)?"""
+    return all(r.run(f'runuser -u {KEA_GROUP} -- /usr/sbin/{daemon} -t {KEA_DIR}/{conf}', sudo=True,
+                     check=False)[0] == 0
+               for conf, daemon in (('kea-dhcp4.conf', 'kea-dhcp4'), ('kea-dhcp-ddns.conf', 'kea-dhcp-ddns')))
 
 
 def _ntp_present(r):
@@ -410,7 +445,7 @@ def _ntp(r, node, options, log):
     present = _ntp_present(r)
     if not options.ntp:
         return present
-    from ..ntp.render import file_hashes
+    from ..ntp.render import chrony_version, file_hashes
     log('Setting up time sync (chrony)')
     code, _ = r.run('test -x /usr/sbin/chronyd', check=False)
     if code != 0:
@@ -418,8 +453,15 @@ def _ntp(r, node, options, log):
         _apt(r, 'chrony', log)
     _, version = r.run('/usr/sbin/chronyd -v', check=False)
     log(f'  {version.strip()}')
+    version = chrony_version(version)
+    if 'ntp_render' in node:
+        node['ntp_conf'] = node['ntp_render'](version)
     files = {'liteblox-chrony.path': CHRONY_PATH_UNIT.encode(), 'liteblox-chrony.service': CHRONY_RESTART_UNIT.encode()}
     code, _ = r.run(f"grep -qs '^# Generated by LiteBlox' {CHRONY_CONF}", check=False)
+    if code == 0 and r.run(f'/usr/sbin/chronyd -p -f {CHRONY_CONF}', sudo=True, check=False)[0] != 0:
+        # kept only if this chrony reads it: an earlier run's config may not suit the chrony installed now
+        log("  the chrony config LiteBlox wrote before doesn't pass this chrony's check: writing a fresh one")
+        code = 1
     write = code != 0
     if write:
         files['chrony.conf'] = node['ntp_conf'].encode()
@@ -446,8 +488,9 @@ def _ntp(r, node, options, log):
         _, journal = r.run('journalctl -u chrony -n 20 --no-pager', sudo=True, check=False)
         raise BootstrapError(f'chrony did not start ({out}):\n{journal}')
     log('  chrony is running; LiteBlox writes its config from now on')
-    node['ntp_setup'] = {'ntp': 1, **({'ntp_files': json.dumps(file_hashes({'chrony.conf': node['ntp_conf']})),
-                                       'ntp_drift': None} if write else {})}
+    node['ntp_setup'] = {'ntp': 1, 'chrony_version': version,
+                         **({'ntp_files': json.dumps(file_hashes({'chrony.conf': node['ntp_conf']})),
+                            'ntp_drift': None} if write else {})}
     return True
 
 

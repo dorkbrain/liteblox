@@ -58,9 +58,10 @@ def ha_state(c):
 
 
 def _ordered(rows, pair):
-    """The standby first and the primary last, so the node serving clients changes after its partner."""
-    rank = {pair.standby_id: 0, pair.primary_id: 2} if pair.active else {}
-    return sorted(rows, key=lambda n: (rank.get(n['id'], 1), n['name']))
+    """The standby first and the primary last, so the node serving clients changes after its partner. A node
+    outside the pair goes before both: one leaving it stops serving before the new pair starts."""
+    rank = {pair.standby_id: 1, pair.primary_id: 2} if pair.active else {}
+    return sorted(rows, key=lambda n: (rank.get(n['id'], 0), n['name']))
 
 
 def record_commit(conn, node_id, files):

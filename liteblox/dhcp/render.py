@@ -9,8 +9,8 @@ from .model import DEBIAN, LIFETIMES
 GENERATED = {'generated-by': 'LiteBlox'}
 
 
-def _loggers(name):
-    return [{'name': name, 'output-options': [{'output': 'syslog'}], 'severity': 'INFO'}]
+def _loggers(name, layout):
+    return [{'name': name, layout.logger_output_key: [{'output': 'syslog'}], 'severity': 'INFO'}]
 
 
 # form field → Kea option name; list fields are joined with commas, as Kea's option-data takes them
@@ -159,7 +159,7 @@ def dhcp4(config, layout=DEBIAN):
         'interfaces-config': {'interfaces': list(config.interfaces), 'service-sockets-max-retries': SOCKET_RETRIES,
                               'service-sockets-retry-wait-time': SOCKET_RETRY_WAIT_MS},
         'lease-database': {'type': 'memfile', 'name': layout.lease_file, 'persist': True, 'lfc-interval': 3600},
-        'loggers': _loggers('kea-dhcp4'),
+        'loggers': _loggers('kea-dhcp4', layout),
         'subnet4': [subnet4(sub, sub in ddns_active(config)) for sub in sorted(config.subnets, key=lambda x: x.id)],
         'user-context': GENERATED,
         **_lifetimes(s),
@@ -188,7 +188,7 @@ def dhcp_ddns(config, layout=DEBIAN):
         'forward-ddns': {'ddns-domains': [{'name': z + '.', 'key-name': key['name'], 'dns-servers': servers}
                                           for z in forward]},
         'ip-address': '127.0.0.1',
-        'loggers': _loggers('kea-dhcp-ddns'),
+        'loggers': _loggers('kea-dhcp-ddns', layout),
         'port': layout.d2_port,
         'reverse-ddns': {'ddns-domains': [{'name': z + '.', 'key-name': key['name'], 'dns-servers': servers}
                                           for z in reverse]},

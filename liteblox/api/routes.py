@@ -587,7 +587,8 @@ def dhcp_get(user: ApiUser = Depends(api_user), conn=Depends(get_db)):
     s = load_settings(conn)
     return {'servers': servers,
             'pair': {'primary': pair.primary_name, 'standby': pair.standby_name, 'primary_address': pair.primary_address,
-                     'standby_address': pair.standby_address, 'port': pair.port} if pair.active else None,
+                     'standby_address': pair.standby_address, 'port': pair.port,
+                     'interfaces': pair.interface_map} if pair.active else None,
             'settings': {'valid_lifetime': s.valid_lifetime, 'renew_timer': s.renew_timer,
                          'rebind_timer': s.rebind_timer, 'options': s.options, 'extra_options': s.extra_options,
                          'authoritative': s.authoritative, 'ddns_key': s.ddns_key['name'] if s.ddns_key else None,

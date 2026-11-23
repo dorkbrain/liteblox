@@ -41,7 +41,7 @@ def test_servers_settings_and_subnets(api, pair):
     assert [(s['node'], s['does'], s['interfaces'], s['ha_state']) for s in d['servers']] == [
         ('ns1', 'failover primary', ['ens19'], 'hot-standby'), ('ns2', 'standby', ['ens19'], 'hot-standby')]
     assert d['pair'] == {'primary': 'ns1', 'standby': 'ns2', 'primary_address': '198.51.100.53',
-                         'standby_address': '198.51.100.54', 'port': 8001}
+                         'standby_address': '198.51.100.54', 'port': 8001, 'interfaces': {}}
     assert 'secret' not in str(d['settings'])
     subnets = api.get('/api/v1/dhcp/subnets').json()
     assert subnets[0]['prefix'] == '198.51.100.0/24' and subnets[0]['reservations'][0]['hostname'] == 'printer'
@@ -134,3 +134,11 @@ def test_writes_need_a_full_admin_token(api, pair):
             kw = {'json': body} if body is not None else {}
             assert api.request(method, url, headers=headers, **kw).status_code == 403, (method, url)
     assert pair[1].kea_leases and api.get('/api/v1/dhcp/leases', headers=api.read).status_code == 200
+
+
+def test_a_standby_with_its_own_interface_names(api, conn, settings, pair):
+    store.set_pair(conn, PKI(settings.pki_dir), 1, 2, '198.51.100.53', '198.51.100.54', 8001, {'ens19': 'eth1'})
+    d = api.get('/api/v1/dhcp').json()
+    assert d['pair']['interfaces'] == {'ens19': 'eth1'}
+    assert [s['interfaces'] for s in d['servers']] == [['ens19'], ['eth1']]
+    assert api.get('/api/v1/dhcp/subnets/1').json()['interface'] == 'ens19'

@@ -122,24 +122,65 @@ def ensure_tls(conn, pki, node_id, address):
             {'address': address, 'cert': cert.decode(), 'key': key.decode(), 'ca': pki.ca_pem().decode()}), node_id))
 
 
-def set_pair(conn, pki, primary_id, standby_id, primary_address, standby_address, port):
-    """Pair the two nodes: the standby serves the primary's interfaces; each gets its peer certificate."""
+def _differing(mapping):
+    return {k: v for k, v in (mapping or {}).items() if k != v}
+
+
+def rename_subnet_interfaces(conn, mapping):
+    """Give every subnet the name `mapping` has for its interface (one pass, so a swap of two names works)."""
+    for row in conn.execute('SELECT id, interface FROM dhcp4_subnets').fetchall():
+        if row['interface'] in mapping:
+            conn.execute('UPDATE dhcp4_subnets SET interface = ? WHERE id = ?', (mapping[row['interface']], row['id']))
+
+
+def set_interface_map(conn, mapping):
+    with conn:
+        conn.execute('UPDATE dhcp4_ha SET interface_map = ? WHERE id = 1', (json.dumps(_differing(mapping), sort_keys=True),))
+
+
+def leaving_pair(old, primary_id, standby_id):
+    """The nodes of the current pair (`old`, model.HaPair) that the new one leaves out."""
+    return [n for n in (old.primary_id, old.standby_id) if old.active and n not in (primary_id, standby_id)]
+
+
+def set_pair(conn, pki, primary_id, standby_id, primary_address, standby_address, port, interface_map=None):
+    """Pair the two nodes: the standby serves the primary's interfaces, under its own names (interface_map,
+    {primary's name: standby's}); each gets its peer certificate. Subnets always carry the primary's names, so when
+    the old standby becomes the primary they're renamed through the old map."""
+    from .model import ha_pair
     ensure_tls(conn, pki, primary_id, primary_address)
     ensure_tls(conn, pki, standby_id, standby_address)
-    served = conn.execute('SELECT dhcp_interfaces FROM nodes WHERE id = ?', (primary_id,)).fetchone()[0]
+    old = ha_pair(conn)
+    mapping = _differing(interface_map)
+    served = json.loads(conn.execute('SELECT dhcp_interfaces FROM nodes WHERE id = ?', (primary_id,)).fetchone()[0]
+                        or '[]')
     with conn:
+        if old.active and primary_id == old.standby_id:
+            rename_subnet_interfaces(conn, old.interface_map)
+        for gone in leaving_pair(old, primary_id, standby_id):
+            # out of the pair, it serves nothing (as after unpair): never a second server beside the new pair
+            conn.execute("UPDATE nodes SET dhcp_interfaces = '[]' WHERE id = ?", (gone,))
         conn.execute('UPDATE dhcp4_ha SET primary_node_id = ?, standby_node_id = ?, primary_address = ?, '
-                     'standby_address = ?, port = ? WHERE id = 1',
-                     (primary_id, standby_id, primary_address, standby_address, port))
-        conn.execute('UPDATE nodes SET dhcp_interfaces = ? WHERE id = ?', (served, standby_id))
+                     'standby_address = ?, port = ?, interface_map = ? WHERE id = 1',
+                     (primary_id, standby_id, primary_address, standby_address, port,
+                      json.dumps(mapping, sort_keys=True)))
+        conn.execute('UPDATE nodes SET dhcp_interfaces = ? WHERE id = ?',
+                     (json.dumps(sorted(mapping.get(n, n) for n in served)), standby_id))
 
 
 def unpair(conn, keep_id):
-    """Back to one server: `keep_id` keeps serving, its former partner serves nothing."""
-    row = conn.execute('SELECT * FROM dhcp4_ha WHERE id = 1').fetchone()
-    other = row['standby_node_id'] if keep_id == row['primary_node_id'] else row['primary_node_id']
-    served = conn.execute('SELECT dhcp_interfaces FROM nodes WHERE id = ?', (row['primary_node_id'],)).fetchone()[0]
+    """Back to one server: `keep_id` keeps serving (under its own interface names), its former partner serves
+    nothing."""
+    from .model import ha_pair
+    pair = ha_pair(conn)
+    other = pair.standby_id if keep_id == pair.primary_id else pair.primary_id
+    served = json.loads(conn.execute('SELECT dhcp_interfaces FROM nodes WHERE id = ?', (pair.primary_id,)).fetchone()[0]
+                        or '[]')
     with conn:
-        conn.execute('UPDATE dhcp4_ha SET primary_node_id = NULL, standby_node_id = NULL WHERE id = 1')
-        conn.execute('UPDATE nodes SET dhcp_interfaces = ? WHERE id = ?', (served, keep_id))
+        if keep_id == pair.standby_id:
+            rename_subnet_interfaces(conn, pair.interface_map)
+            served = [pair.standby_name_for(n) for n in served]
+        conn.execute("UPDATE dhcp4_ha SET primary_node_id = NULL, standby_node_id = NULL, interface_map = '{}' "
+                     'WHERE id = 1')
+        conn.execute('UPDATE nodes SET dhcp_interfaces = ? WHERE id = ?', (json.dumps(sorted(served)), keep_id))
         conn.execute("UPDATE nodes SET dhcp_interfaces = '[]' WHERE id = ?", (other,))

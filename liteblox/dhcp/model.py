@@ -2,7 +2,7 @@
 settings, and the subnets on those interfaces."""
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 ROLES = ('kea-dhcp4.conf', 'kea-dhcp-ddns.conf')
@@ -20,9 +20,17 @@ class KeaLayout:
     dhcp4_socket: str = '/run/kea/kea4-ctrl-socket'
     d2_socket: str = '/run/kea/kea-ddns-ctrl-socket'
     d2_port: int = 53001
+    kea_version: Optional[str] = None       # None: a current Kea (2.6 and later)
 
     def path(self, role):
         return f'{self.config_dir}/{role}'
+
+    @property
+    def logger_output_key(self):
+        """Kea 2.5 renamed a logger's output_options to output-options; 2.4 knows only the old name."""
+        import re
+        m = re.match(r'\s*(\d+)\.(\d+)', self.kea_version or '')
+        return 'output_options' if m and (int(m.group(1)), int(m.group(2))) < (2, 5) else 'output-options'
 
 
 DEBIAN = KeaLayout()
@@ -134,6 +142,7 @@ class HaPair:
     primary_address: str = ''
     standby_address: str = ''
     port: int = 8001
+    interface_map: dict = field(default_factory=dict)  # {primary's interface: the standby's}; missing = same name
 
     @property
     def active(self):
@@ -144,6 +153,14 @@ class HaPair:
 
     def partner_of(self, node_id):
         return self.standby_id if node_id == self.primary_id else self.primary_id if node_id == self.standby_id else None
+
+    def standby_name_for(self, interface):
+        """The standby's interface that serves what the primary serves on `interface`."""
+        return self.interface_map.get(interface, interface)
+
+    def interface_on(self, node_id, interface):
+        """A subnet's interface (the primary's name) as `node_id` names it."""
+        return self.standby_name_for(interface) if self.active and node_id == self.standby_id else interface
 
 
 @dataclass
@@ -158,10 +175,12 @@ class KeaConfig:
 
 
 def layout_for(node):
-    """DEBIAN with the hooks directory the node's agent reported (it differs per architecture)."""
+    """DEBIAN with the hooks directory the node's agent reported (it differs per architecture) and its Kea's
+    version."""
     keys = node.keys() if hasattr(node, 'keys') else node
     hooks = node['kea_hooks_dir'] if 'kea_hooks_dir' in keys else None
-    return KeaLayout(hooks_dir=hooks) if hooks else DEBIAN
+    version = node['kea_version'] if 'kea_version' in keys else None
+    return replace(DEBIAN, **({'hooks_dir': hooks} if hooks else {}), kea_version=version or None)
 
 
 def settings(conn):
@@ -199,8 +218,10 @@ def ha_pair(conn):
                        'WHERE h.id = 1').fetchone()
     if row is None:
         return HaPair()
+    keys = row.keys()
+    mapping = json.loads(row['interface_map'] or '{}') if 'interface_map' in keys else {}
     return HaPair(row['primary_node_id'], row['standby_node_id'], row['primary_name'] or '', row['standby_name'] or '',
-                  row['primary_address'] or '', row['standby_address'] or '', row['port'])
+                  row['primary_address'] or '', row['standby_address'] or '', row['port'], mapping)
 
 
 def dns_primary(conn):
@@ -220,6 +241,11 @@ def interfaces_of(node):
     return json.loads(node['dhcp_interfaces'] or '[]') if 'dhcp_interfaces' in keys else []
 
 
+def serves(pair, node, subnet):
+    """Does `node` answer for `subnet` (whose interface is the primary's name)?"""
+    return pair.interface_on(node['id'], subnet.interface) in interfaces_of(node)
+
+
 def for_node(conn, node, interfaces=None, dhcp_settings=None, subnet_list=None, pair=None):
     """The node's Kea config from the DB; the keyword arguments stand in for unsaved changes (previews)."""
     if conn is None:
@@ -236,6 +262,12 @@ def for_node(conn, node, interfaces=None, dhcp_settings=None, subnet_list=None, 
             interfaces = json.loads(primary[0] or '[]') if primary else []
     served = interfaces_of(node) if interfaces is None else interfaces
     chosen = subnets(conn) if subnet_list is None else subnet_list
+    if pair.active and pair.role_of(node['id']) == 'standby':
+        # subnets carry the primary's interface names (and `interfaces` is the primary's set): the standby's own
+        # names come from the pair's map, matched by network
+        chosen = [x for x in chosen if x.interface in served]
+        served = [pair.standby_name_for(n) for n in served]
+        chosen = [replace(x, interface=pair.standby_name_for(x.interface)) for x in chosen]
     s = settings(conn) if dhcp_settings is None else dhcp_settings
     for sub in chosen:          # a preview of new settings registers by their mode
         sub.ddns_mode = s.ddns_mode

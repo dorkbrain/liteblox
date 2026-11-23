@@ -488,7 +488,10 @@ def _loggers(loggers, cfg, where):
     if not isinstance(loggers, list):
         raise ConfError(f'{where}: loggers must be a list')
     for logger in loggers:
-        for out in (logger.get('output-options') or []) if isinstance(logger, dict) else ():
+        # output_options: the name before Kea 2.5 (which still reads it)
+        outputs = [o for key in ('output-options', 'output_options') for o in (logger.get(key) or [])] \
+            if isinstance(logger, dict) else []
+        for out in outputs:
             target = out.get('output') if isinstance(out, dict) else None
             if not (target in ('stdout', 'stderr', 'syslog') or (isinstance(target, str) and target.startswith('syslog:'))
                     or (isinstance(target, str) and _under(target, cfg['kea_log_dir']))):
@@ -594,6 +597,7 @@ CHRONY_FIXED = {
     'ntsdumpdir': '/var/lib/chrony',
     'logdir': '/var/log/chrony',
     'leapseclist': '/usr/share/zoneinfo/leap-seconds.list',
+    'leapsectz': 'right/UTC',           # chrony before 4.6 (Ubuntu 24.04), which has no leapseclist
 }
 CHRONY_SOURCE_FLAGS = ('iburst', 'prefer', 'nts')
 CHRONY_SOURCE_VALUES = ('minpoll', 'maxpoll')
@@ -1274,6 +1278,11 @@ class Agent:
         active = self._chrony_active()[0] if chrony else False
         out = {'daemon': 'chrony' if active else None, 'installed': chrony, 'managed': False,
                'files': {'chrony.conf': self._file_sha(self.cfg['chrony_conf'])}}
+        if chrony:
+            # which directives its config may use (chrony 4.5 has no leapseclist)
+            code, text = self.run('chronyd', '-v', timeout=10)
+            m = re.search(r'version (\d+\.\d+(?:\.\d+)?)', text) if code == 0 else None
+            out['version'] = m.group(1) if m else None
         if not active:
             code, _ = self.run('systemctl', 'is-active', 'systemd-timesyncd', timeout=10)
             out['daemon'] = 'timesyncd' if code == 0 else None

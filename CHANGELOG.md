@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.8.0 — 2026-11-23
+
+- DHCP failover pairs no longer need the same interface names on both nodes: the standby's interfaces are matched to the primary's by network (ens19 on one node, eth0.100 on the other, say); the review shows which interface stands for which
+- Swapping a pair's roles, unpairing and re-adopting keep the subnets on the right node's interface names
+- A node leaving a DHCP pair (re-pairing with another partner) stops serving before the new pair starts
+- Ubuntu Server 24.04 nodes, minimal installs too: BIND, Kea 2.4, chrony 4.5 and IPAM set up by bootstrap; Kea 2.4 and chrony 4.5 get configs they accept
+- Bootstrap names any package missing from the node's package sources instead of showing apt's log, and rewrites a config it kept that the node's Kea or chrony rejects
+- After updating, run Upgrade agents on the Nodes page (over mTLS; no Repair needed). The database is updated on start
+
+
 ## 4.7.2 — 2026-11-23
 
 - IPAM: First available on a network page jumps to the lowest free address with no name in DNS and highlights its row

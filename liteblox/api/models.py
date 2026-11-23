@@ -279,6 +279,7 @@ class DhcpPair(BaseModel):
     primary_address: str
     standby_address: str
     port: int
+    interfaces: dict[str, str] = {}         # the primary's interface: the standby's, where their names differ
 
 
 class DhcpSettings(BaseModel):

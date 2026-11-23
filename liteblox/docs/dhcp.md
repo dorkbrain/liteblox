@@ -129,7 +129,7 @@ Two nodes can share DHCP as a **hot-standby pair**:
 Clients notice nothing beyond their next renewal going to the other server.
 
 **Setting it up:**
-1. Set DHCP up on both nodes (each node's page → **Set up DHCP**). The standby needs interfaces with the same names as the ones the primary serves (`eth0` on both, say). Where they differ (a Raspberry Pi's VLAN interface `eth0.100` beside a VM's `ens19`, say), rename one: with NetworkManager, `nmcli con modify <connection> connection.interface-name ens19`, then `nmcli con up <connection>`.
+1. Set DHCP up on both nodes (each node's page → **Set up DHCP**). The standby needs an interface with an address on each network the primary serves. LiteBlox matches them **by network**, so their names may differ (a Raspberry Pi's VLAN interface `eth0.100` beside a VM's `ens19`, say): the review says which of the standby's interfaces stands in for which of the primary's, and so does **Servers** afterwards.
 2. On the DHCP tab, **Failover pair**: pick the primary and the standby, and each one's **link address**, which is where it listens for its partner. An address on the DHCP network is a good choice. Open TCP **8001** (or the port you pick) between the two addresses.
 3. **Review**, then **Pair them**. The standby changes first, then the primary. LiteBlox waits until both report **hot-standby**; if they don't find each other within 90 seconds, both are rolled back.
 
@@ -144,7 +144,7 @@ DNS registration works throughout: whichever server answers sends the updates.
 
 **Clocks:** the two must agree within a minute, or Kea stops failover altogether (**terminated**). LiteBlox [checks the clocks](/help/troubleshooting#a-nodes-clock-is-off) every minute.
 
-**Changes** on the DHCP tab (subnets, reservations, settings) go to both nodes, the standby first. The standby's interfaces follow the primary's.
+**Changes** on the DHCP tab (subnets, reservations, settings) go to both nodes, the standby first. The standby's interfaces follow the primary's: **Change interfaces** on the primary matches the standby's again, and is refused if the standby has nothing on one of the networks or can't be reached. Subnets always name the primary's interface; the standby's own Kea configuration uses its own names.
 
 **End the pair** keeps one node serving and stops DHCP on the other.
 

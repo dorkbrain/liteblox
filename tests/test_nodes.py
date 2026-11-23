@@ -568,6 +568,65 @@ def test_setup_waits_for_another_apt_run(tmp_path, monkeypatch):
                                 tmp_path / 'backups', '0.1.0', print, connect=LockedRemote)
 
 
+class NoKeaRemote(FakeRemote):
+    """A node whose package sources don't have Kea (Ubuntu 22.04 without universe), with an old Kea once there."""
+    message = "E: Unable to locate package kea-dhcp4-server\nE: Package 'kea-dhcp-ddns-server' has no installation candidate"
+
+    def run(self, cmd, sudo=False, check=True, label=None, timeout=600):
+        if 'install -y kea' in cmd and NoKeaRemote.message:
+            self.commands.append(('sudo ' if sudo else '') + cmd)
+            raise bootstrap_mod.RemoteError(label, 100, NoKeaRemote.message)
+        if cmd == '/usr/sbin/kea-dhcp4 -v':
+            return 0, '2.0.2'
+        return super().run(cmd, sudo, check, label, timeout)
+
+
+def test_a_package_missing_from_the_sources_is_named(tmp_path, monkeypatch):
+    assert bootstrap_mod.missing_packages(NoKeaRemote.message) == ['kea-dhcp-ddns-server', 'kea-dhcp4-server']
+    assert bootstrap_mod.missing_packages('E: Could not get lock /var/lib/dpkg/lock-frontend') == []
+    monkeypatch.setattr(bootstrap_mod, 'AgentClient', FakeAgent)
+    node = {'name': 'ns1', 'host': '192.0.2.53', 'ssh_port': 22, 'agent_port': 8530,
+            'host_key': HOST_KEY, 'host_key_fp': FP}
+    args = (bootstrap_mod.Credentials('claude', password='pw'), bootstrap_mod.Options(dhcp=True),
+            PKI(tmp_path / 'pki').ensure(), tmp_path / 'backups', '0.1.0')
+    with pytest.raises(bootstrap_mod.BootstrapError, match=r"kea-dhcp-ddns-server, kea-dhcp4-server are not in this "
+                                                           r"node's package sources .* universe has Kea"):
+        bootstrap_mod.bootstrap(node, *args, print, connect=NoKeaRemote)
+    monkeypatch.setattr(NoKeaRemote, 'message', '')         # Kea is there now, but old
+    lines = []
+    bootstrap_mod.bootstrap(node, *args, lines.append, connect=NoKeaRemote)
+    assert any('Kea 2.0.2 is older than LiteBlox is tested with' in line for line in lines)
+    assert not bootstrap_mod.kea_too_old('2.4.1') and not bootstrap_mod.kea_too_old('2.6.3')
+    assert bootstrap_mod.kea_too_old('2.2.0') and not bootstrap_mod.kea_too_old('')
+
+
+class StaleKeaRemote(FakeRemote):
+    """An earlier run left LiteBlox's Kea config, which this Kea rejects until a fresh one is written."""
+
+    def run(self, cmd, sudo=False, check=True, label=None, timeout=600):
+        if cmd.startswith('grep -qs') and 'kea' in cmd:
+            self.commands.append(cmd)
+            return 0, ''
+        if 'install kea config' == label and '/etc/kea/kea-dhcp4.conf' in cmd:
+            self.fresh = True
+        if cmd.startswith('runuser') and ' -t ' in cmd and not getattr(self, 'fresh', False):
+            self.commands.append(cmd)
+            return 1, 'got unexpected keyword "output-options"'
+        return super().run(cmd, sudo, check, label, timeout)
+
+
+def test_a_kept_kea_config_this_kea_rejects_is_written_again(tmp_path, monkeypatch):
+    monkeypatch.setattr(bootstrap_mod, 'AgentClient', FakeAgent)
+    node = {'name': 'ns2', 'host': '192.0.2.54', 'ssh_port': 22, 'agent_port': 8530,
+            'host_key': HOST_KEY, 'host_key_fp': FP}
+    lines = []
+    bootstrap_mod.bootstrap(node, bootstrap_mod.Credentials('claude', password='pw'), bootstrap_mod.Options(dhcp=True),
+                            PKI(tmp_path / 'pki').ensure(), tmp_path / 'backups', '0.1.0', lines.append,
+                            connect=StaleKeaRemote)
+    assert any("doesn't pass this Kea's check: writing a fresh one" in line for line in lines)
+    assert any('kea-dhcp4.conf' in u for u in StaleKeaRemote.last.uploads)
+
+
 # ── the agent check at the end of bootstrap ─────────────────────────────────────
 
 class _Clock:

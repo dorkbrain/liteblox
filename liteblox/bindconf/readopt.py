@@ -489,7 +489,8 @@ def _rebuild_ntp(plan, by_id, parsed):
             plan.blockers.append(f"{r.node['name']}: its time sources differ from the other nodes'")
         found = source_list if found is None else found
         plan.nodes[i].update({'ntp': 1, 'ntp_serve': int(bool(allow)), 'ntp_allow': json.dumps(allow),
-                              'ntp_local': local, 'ntp_files': json.dumps(file_hashes({'chrony.conf': r.ntp}))})
+                              'ntp_local': local, 'ntp_files': json.dumps(file_hashes({'chrony.conf': r.ntp})),
+                              'chrony_version': (r.status.get('time') or {}).get('version')})
     plan.ntp = found
 
 
@@ -507,7 +508,7 @@ def _rebuild_dhcp(plan, by_id, parsed, primary):
     kea_reads = [r for r in plan.reads if r.kea and r.node['id'] in plan.nodes]
     if not kea_reads:
         return
-    settings, subnets, pair = None, {}, None
+    settings, per_node, served_by, pair = None, {}, {}, None
     zones = {z['name'] for z in plan.zones if z['kind'] == 'primary'}
     bind_addrs = set().union(*(_addresses(by_id[i]) for i in parsed)) if parsed else set()
     for r in kea_reads:
@@ -518,7 +519,9 @@ def _rebuild_dhcp(plan, by_id, parsed, primary):
         except (ValueError, KeyError) as e:
             plan.blockers.append(f"{r.node['name']}: its Kea config doesn't parse ({e})")
             continue
+        served_by[i] = d4.get('interfaces-config', {}).get('interfaces', [])
         plan.nodes[i].update({'dhcp': 1, 'kea_hooks_dir': (r.status.get('kea') or {}).get('hooks_dir'),
+                              'kea_version': (r.status.get('kea') or {}).get('version'),
                               'dhcp_interfaces': json.dumps(d4.get('interfaces-config', {}).get('interfaces', [])),
                               'dhcp_files': json.dumps({k: v for k, v in ((r.status.get('kea') or {}).get('files')
                                                                           or {}).items() if v})})
@@ -537,11 +540,8 @@ def _rebuild_dhcp(plan, by_id, parsed, primary):
         reverse = sorted({d['name'].rstrip('.') for d in (d2.get('reverse-ddns') or {}).get('ddns-domains', [])})
         for s in d4.get('subnet4', []):
             sub = _subnet(plan, r, s, forward, zones, Subnet, Reservation, reverse if external else None)
-            if sub is None:
-                continue
-            if sub.id in subnets and subnets[sub.id] != sub:
-                plan.blockers.append(f'DHCP subnet {sub.prefix} (id {sub.id}): the nodes have it differently')
-            subnets.setdefault(sub.id, sub)
+            if sub is not None:
+                per_node.setdefault(i, {})[sub.id] = sub
         for hook in d4.get('hooks-libraries', []):
             ha = ((hook.get('parameters') or {}).get('high-availability') or [None])[0]
             if not ha:
@@ -555,12 +555,48 @@ def _rebuild_dhcp(plan, by_id, parsed, primary):
             if found and pair and found != pair:
                 plan.blockers.append('the two failover nodes describe the pair differently')
             pair = pair or found
+    subnets = _merge_subnets(plan, per_node, served_by, pair)
     plan.dhcp = {'settings': vars(settings) if settings else {}, 'subnets': sorted(subnets.values(), key=lambda s: s.id),
                  'pair': pair}
     if pair:
         missing = [n for n in (pair['primary_id'], pair['standby_id']) if n not in {r.node['id'] for r in kea_reads}]
         if missing:
             plan.blockers.append('the DHCP failover pair needs both its nodes re-adopted together')
+
+
+def _merge_subnets(plan, per_node, served_by, pair):
+    """One set of subnets from every node's. In a failover pair the standby may name its interfaces differently
+    (4.8): its subnets are compared without the interface, and pair['interface_map'] ({primary's: standby's}) is
+    rebuilt from the subnets both have, then from the names left over."""
+    from dataclasses import replace
+    subnets, mapping = {}, {}
+    primary = pair['primary_id'] if pair else None
+    standby = pair['standby_id'] if pair else None
+    order = sorted(per_node, key=lambda n: (n == standby, n))     # the primary's (or any) first
+    for node_id in order:
+        for sub in per_node[node_id].values():
+            have = subnets.get(sub.id)
+            if node_id == standby and have is not None:
+                if mapping.setdefault(have.interface, sub.interface) != sub.interface:
+                    plan.blockers.append(f'the standby serves {have.interface} under two names')
+                sub = replace(sub, interface=have.interface)
+            if have is not None and have != sub:
+                plan.blockers.append(f'DHCP subnet {sub.prefix} (id {sub.id}): the nodes have it differently')
+            subnets.setdefault(sub.id, sub)
+    if pair:
+        left = [n for n in served_by.get(primary, []) if n not in mapping]
+        theirs = [n for n in served_by.get(standby, []) if n not in mapping.values()]
+        for name in list(left):
+            if name in theirs:
+                mapping[name] = name
+                left.remove(name)
+                theirs.remove(name)
+        if len(left) == 1 and len(theirs) == 1:
+            mapping[left[0]] = theirs[0]
+        elif left:
+            plan.blockers.append(f"can't tell which of the standby's interfaces serve the primary's {', '.join(left)}")
+        pair['interface_map'] = {k: v for k, v in mapping.items() if k != v}
+    return subnets
 
 
 def _pair(plan, peers):
@@ -690,9 +726,9 @@ def record(conn, plan, tls):
         tls(conn, pair['standby_id'], pair['standby_address'])
         with conn:
             conn.execute('UPDATE dhcp4_ha SET primary_node_id = ?, standby_node_id = ?, primary_address = ?, '
-                         'standby_address = ?, port = ? WHERE id = 1',
+                         'standby_address = ?, port = ?, interface_map = ? WHERE id = 1',
                          (pair['primary_id'], pair['standby_id'], pair['primary_address'], pair['standby_address'],
-                          pair['port']))
+                          pair['port'], json.dumps(pair.get('interface_map') or {}, sort_keys=True)))
 
 
 def scratch(conn):

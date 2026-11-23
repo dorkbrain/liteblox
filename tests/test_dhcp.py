@@ -37,7 +37,7 @@ def test_the_rendered_config_serves_nothing():
 
 def test_layout_follows_the_nodes_hooks_dir():
     assert layout_for({'kea_hooks_dir': '/usr/lib/aarch64-linux-gnu/kea/hooks'}).hooks_dir.startswith('/usr/lib/aarch64')
-    assert layout_for({'kea_hooks_dir': None}) is DEBIAN
+    assert layout_for({'kea_hooks_dir': None}) == DEBIAN
     files = render(KeaConfig(), KeaLayout(hooks_dir='/usr/lib/aarch64-linux-gnu/kea/hooks'))
     assert 'aarch64' in files['kea-dhcp4.conf']
 

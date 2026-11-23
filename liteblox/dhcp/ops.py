@@ -28,7 +28,8 @@ def dhcp_interfaces(settings, conn):
     for n in apply.dhcp_nodes(conn):
         status, _ = node_status(settings, n)
         names = interfaces_of(n)
-        out += [{**i, 'node': n['name'], 'served': i['name'] in names} for i in (status or {}).get('interfaces') or []]
+        out += [{**i, 'node': n['name'], 'node_id': n['id'], 'served': i['name'] in names}
+                for i in (status or {}).get('interfaces') or []]
     return out
 
 

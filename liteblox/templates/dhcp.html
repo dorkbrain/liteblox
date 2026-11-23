@@ -18,14 +18,14 @@
   {% if not servers %}
   <p class="muted">No node runs Kea yet. On a node's page, the DHCP card has <strong>Set up DHCP</strong>. <a href="/help/dhcp#setting-up-dhcp-on-a-node">How</a></p>
   {% endif %}
-  {% if servers %}<p class="muted small">Kea answers DHCP on the ticked interfaces; a subnet is served on the one with an address in it.{% if pair.active %} The standby serves what {{ pair.primary_name }} serves.{% endif %}</p>{% endif %}
+  {% if servers %}<p class="muted small">Kea answers DHCP on the ticked interfaces; a subnet is served on the one with an address in it.{% if pair.active %} The standby serves what {{ pair.primary_name }} serves, on its interfaces in the same networks.{% endif %}</p>{% endif %}
   <ul class="plain servers">
   {% for s in servers %}
   <li>
     <div class="server-line"><a href="/nodes/{{ s.node.id }}"><strong>{{ s.node.name }}</strong></a>
       {%- if s.role %} <span class="pill {{ 'ready' if s.role == 'primary' }}">{{ s.role }}</span>{% endif %}
       {%- if s.ha %} <span class="pill {{ 'ready' if s.ha.local.state == 'hot-standby' else ('error' if s.ha.local.state == 'terminated' else 'warn') }}" title="{{ s.ha.remote.name }}: {{ s.ha.remote.state }}{{ '' if s.ha.remote.in_touch else ', not in touch' }}">{{ s.ha.local.state }}</span>{% endif %}
-      <span class="muted small">{% if s.served %}serves {% for i in s.served %}<code>{{ i }}</code>{% if not loop.last %}, {% endif %}{% endfor %}{% else %}serves nothing yet{% endif %}</span></div>
+      <span class="muted small">{% if s.served %}serves {% for i in s.served %}<code>{{ i }}</code>{% if i in s.stands_for %} (for {{ pair.primary_name }}'s <code>{{ s.stands_for[i] }}</code>){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}serves nothing yet{% endif %}</span></div>
     {% if s.error %}<p class="error small">{{ s.error }}</p>
     {% elif user.is_admin and s.role != 'standby' %}
     <details class="iface-edit" {% if not s.served %}open{% endif %}><summary class="small">Change interfaces</summary>

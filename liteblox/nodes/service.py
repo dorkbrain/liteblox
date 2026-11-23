@@ -171,6 +171,11 @@ def record_status(conn, node_id, status=None, error=None, extra=None):
         'named_version': status['named_version'], 'networks': json.dumps(own_networks(status)),
         'addresses': json.dumps(own_addresses(status)), **(extra or {}),
     }
+    kea, chrony = status.get('kea') or {}, status.get('time') or {}
+    if kea.get('installed') and kea.get('version'):
+        fields['kea_version'] = kea['version']      # which spelling its config needs (dhcp.model.KeaLayout)
+    if chrony.get('installed') and chrony.get('version'):
+        fields['chrony_version'] = chrony['version']    # which directives (ntp.render.leap_line)
     with conn:
         conn.execute(f"UPDATE nodes SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
                      (*fields.values(), node_id))
@@ -377,6 +382,8 @@ def start_bootstrap(settings, node_id, creds, options, username, background=True
         if getattr(options, 'ntp', False):
             from ..ntp.apply import files_for
             node['ntp_conf'] = files_for(conn, node)['chrony.conf']
+            # once bootstrap knows the chrony it installed: the config for that version
+            node['ntp_render'] = lambda version: files_for(conn, {**node, 'chrony_version': version})['chrony.conf']
         try:
             try:
                 status = bootstrap(node, creds, options, PKI(settings.pki_dir), settings.backups_dir,

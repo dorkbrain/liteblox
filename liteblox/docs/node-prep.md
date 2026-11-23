@@ -1,6 +1,6 @@
 # Preparing a node
 
-A **node** is a server LiteBlox runs BIND on (or Kea, chrony, or only the agent: see [Nodes without BIND](#nodes-without-bind)). LiteBlox installs BIND if it's missing and writes its whole configuration, so all a node needs is a Debian machine with a fixed address and an account that can use `sudo`. x86-64 and 64-bit ARM both work: a Raspberry Pi 4 or 5 running Raspberry Pi OS Lite (64-bit), which is Debian 13, makes a fine node.
+A **node** is a server LiteBlox runs BIND on (or Kea, chrony, or only the agent: see [Nodes without BIND](#nodes-without-bind)). LiteBlox installs BIND if it's missing and writes its whole configuration, so all a node needs is a Debian or Ubuntu machine with a fixed address and an account that can use `sudo`. Debian 13 and Ubuntu Server 24.04 (the minimal install is enough) both work, on x86-64 or 64-bit ARM: a Raspberry Pi 4 or 5 running Raspberry Pi OS Lite (64-bit), which is Debian 13, makes a fine node. See [Ubuntu Server](#ubuntu-server) for what differs there.
 
 This page takes a fresh Debian 13 machine to the point where you can add it on the **Nodes** page, in about 15 minutes. For a server that already runs BIND with zones of its own, do steps 4–8, then see [Bringing in existing servers](/help/existing-servers).
 
@@ -164,6 +164,16 @@ So nothing comes as a surprise, setup (from the node's page, **Set up**):
 - **sets up Kea DHCP** only when **Set up Kea DHCP** is ticked: installs `kea-dhcp4-server kea-dhcp-ddns-server`, adds `liteblox-agent` to the `_kea` group, makes `/etc/kea` group-writable, and installs two small socket proxies so the agent can talk to Kea. Kea gets a configuration that serves nothing until you add a subnet. See [DHCP (Kea)](/help/dhcp).
 
 Running setup again repairs or upgrades the agent and changes nothing that's already in place.
+
+## Ubuntu Server
+
+Ubuntu Server 24.04 works as a node with everything (BIND, Kea, chrony, IPAM), from its minimal install too. The steps above apply with these differences:
+
+- **Static IP:** Ubuntu uses netplan. Set the address in `/etc/netplan/` (the installer's file, often `50-cloud-init.yaml`), then `sudo netplan apply`.
+- **Packages:** BIND, Kea and chrony all come from Ubuntu's `main` repository on 24.04, so nothing else needs enabling. On releases before 23.04, Kea is in `universe`. When a package can't be found, setup stops and names it, so you can enable its repository and run setup again.
+- **Versions:** Ubuntu 24.04 has BIND 9.18, Kea 2.4 and chrony 4.5, older than Debian 13's. LiteBlox writes each one's configuration in the form that version reads, and a failover pair can mix them (Kea 2.4 with 2.6).
+- **Ping:** Ubuntu doesn't let ordinary users ping. Setup lets the agent's group do it (`/etc/sysctl.d/60-liteblox-agent-ping.conf`), so IPAM's probes use ICMP there too.
+- **systemd-resolved** keeps its own resolver on 127.0.0.53 and 127.0.0.54. BIND listens beside it without any change.
 
 ## Nodes without BIND
 

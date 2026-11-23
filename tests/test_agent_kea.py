@@ -80,6 +80,8 @@ def test_rendered_config_passes_the_allow_lists(kea_client, layout):
      'control-socket must be'),
     ('kea-dhcp4.conf', lambda d: d['Dhcp4']['loggers'][0]['output-options'][0].update({'output': '/etc/cron.d/x'}),
      'logger output'),
+    ('kea-dhcp4.conf', lambda d: d['Dhcp4']['loggers'][0].update({'output_options': [{'output': '/etc/cron.d/x'}]}),
+     'logger output'),           # Kea 2.4's spelling is checked too
     ('kea-dhcp4.conf', lambda d: d['Dhcp4'].update({'dhcp-ddns': {'server-ip': '192.0.2.1'}}), 'loopback'),
     ('kea-dhcp-ddns.conf', lambda d: d['DhcpDdns'].update({'ip-address': '0.0.0.0'}), 'loopback'),
     ('kea-dhcp-ddns.conf', lambda d: d['DhcpDdns'].update({'tsig-keys': [{'name': 'k', 'secret-file': '/x'}]}),
@@ -241,3 +243,19 @@ def test_status_and_files_for_readopt(kea_client, layout):
     assert client.dhcp_files(secrets=True)['kea-dhcp-ddns.conf'] == files['kea-dhcp-ddns.conf']
     Path(cfg['kea_dir'], 'kea-dhcp4.conf').write_text('{"Dhcp4": {}}')
     assert client.status()['kea']['liteblox'] is False
+
+
+def test_kea_before_2_5_gets_its_own_logger_spelling(kea_client, layout):
+    from liteblox.dhcp.model import DEBIAN, layout_for
+    assert layout_for({'kea_hooks_dir': None, 'kea_version': '2.4.1'}).logger_output_key == 'output_options'
+    for version in ('2.6.3', None, ''):
+        assert layout_for({'kea_hooks_dir': None, 'kea_version': version}).logger_output_key == 'output-options'
+    old = layout_for({'kea_hooks_dir': '/usr/lib/aarch64-linux-gnu/kea/hooks', 'kea_version': '2.4.1'})
+    assert old.hooks_dir.startswith('/usr/lib/aarch64') and DEBIAN.kea_version is None
+    for role in ('kea-dhcp4.conf', 'kea-dhcp-ddns.conf'):
+        text = render(KeaConfig(), old)[role]
+        assert '"output_options"' in text and '"output-options"' not in text
+    from dataclasses import replace
+    client, cfg = kea_client
+    agent_mod.validate_kea('kea-dhcp4.conf', render(KeaConfig(), replace(layout, kea_version='2.4.1'))['kea-dhcp4.conf'],
+                           cfg)

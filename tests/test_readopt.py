@@ -14,7 +14,7 @@ from liteblox.config import load_settings
 from liteblox.dhcp import apply as dhcp_apply
 from liteblox.ntp import apply as ntp_apply
 from liteblox.dhcp import store
-from liteblox.dhcp.model import Reservation, Subnet, ha_pair
+from liteblox.dhcp.model import Reservation, Subnet, ha_pair, subnets as load_subnets
 from liteblox.dns.declare import managed_file
 from liteblox.nodes import roles
 from liteblox.nodes import service as nodes
@@ -45,7 +45,7 @@ class OldNode(FakeNode):
     def status(self):
         out = super().status()
         out['interfaces'] = [{'name': 'ens18', 'up': True, 'addresses': ADDRS[self.name][:1]},
-                             {'name': 'ens19', 'up': True, 'addresses': ADDRS[self.name][1:]}]
+                             {'name': getattr(self, 'lab_name', 'ens19'), 'up': True, 'addresses': ADDRS[self.name][1:]}]
         out['kea']['installed'] = bool(self.kea_files)
         d4 = json.loads(self.kea_files.get('kea-dhcp4.conf') or '{}').get('Dhcp4') or {}
         out['kea'].update(liteblox=(d4.get('user-context') or {}).get('generated-by') == 'LiteBlox',
@@ -400,6 +400,37 @@ def test_blockers(conn, settings, old, case, message):
     with pytest.raises(readopt.ReadoptError):
         readopt.readopt(conn, settings, chosen, 'admin', print, transfer=transfer)
     assert not conn.execute('SELECT 1 FROM zones').fetchone()
+
+
+def test_a_standby_with_its_own_interface_names(conn, settings, old):
+    old_conn, fakes = old
+    ns1, ns2 = (nodes.get_node(old_conn, n)['id'] for n in ('ns1', 'ns2'))
+    store.set_pair(old_conn, PKI(settings.pki_dir), ns1, ns2, '198.51.100.53', '198.51.100.54', 8001, {'ens19': 'eth1'})
+    for node in nodes.list_nodes(old_conn):
+        fakes[node['name']].kea_files = dhcp_apply.files_for(old_conn, node)
+    fakes['ns2'].lab_name = 'eth1'
+    standby = json.loads(fakes['ns2'].kea_files['kea-dhcp4.conf'])['Dhcp4']
+    assert standby['interfaces-config']['interfaces'] == ['eth1']
+    readopt.readopt(conn, settings, ids(conn), 'admin', print, transfer=transfer)
+    assert ha_pair(conn).interface_map == {'ens19': 'eth1'}
+    assert {s.interface for s in load_subnets(conn)} == {'ens19'}
+    assert nodes.get_node(conn, 'ns2')['dhcp_interfaces'] == '["eth1"]'
+    from liteblox.nodes import drift
+    for n in nodes.list_nodes(conn):
+        assert drift.dhcp_changed(n, fakes[n['name']].status()) == [] and not dhcp_apply.stale(conn, n)
+
+
+def test_a_standby_subnet_that_differs_beyond_its_interface_still_blocks(conn, settings, old):
+    old_conn, fakes = old
+    ns1, ns2 = (nodes.get_node(old_conn, n)['id'] for n in ('ns1', 'ns2'))
+    store.set_pair(old_conn, PKI(settings.pki_dir), ns1, ns2, '198.51.100.53', '198.51.100.54', 8001, {'ens19': 'eth1'})
+    for node in nodes.list_nodes(old_conn):
+        fakes[node['name']].kea_files = dhcp_apply.files_for(old_conn, node)
+    conf = json.loads(fakes['ns2'].kea_files['kea-dhcp4.conf'])
+    conf['Dhcp4']['subnet4'][0]['pools'] = [{'pool': '198.51.100.100 - 198.51.100.120'}]
+    fakes['ns2'].kea_files['kea-dhcp4.conf'] = json.dumps(conf, indent=2, sort_keys=True) + '\n'
+    pv = readopt.preview(conn, settings, ids(conn))
+    assert any('the nodes have it differently' in b for b in pv.blockers), pv.blockers
 
 
 def test_a_kea_config_not_from_liteblox_is_left_alone(tmp_path, conn, settings, monkeypatch):

@@ -595,6 +595,18 @@ MIGRATIONS = [
     );
     INSERT INTO https_settings (id) VALUES (1);
     """,
+    # v41 (4.8): the standby of a failover pair may name its interfaces differently: {primary's name: standby's},
+    # matched by network. Subnets keep the primary's names; empty means the same names on both
+    """
+    ALTER TABLE dhcp4_ha ADD COLUMN interface_map TEXT NOT NULL DEFAULT '{}';
+    """,
+    # v42 (4.8): Kea's and chrony's versions as the node last reported them, for what each one reads: Kea before
+    # 2.5 (Ubuntu 24.04's 2.4) spells a logger's output_options with an underscore, chrony before 4.6 has no
+    # leapseclist
+    """
+    ALTER TABLE nodes ADD COLUMN kea_version TEXT;
+    ALTER TABLE nodes ADD COLUMN chrony_version TEXT;
+    """,
 ]
 
 

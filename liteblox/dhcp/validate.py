@@ -407,9 +407,31 @@ def check_reservation(r, subnet, served):
 
 # ── the failover pair ──────────────────────────────────────────────────────────
 
+def match_interfaces(primary, standby, primary_live, standby_live, served):
+    """({primary's interface: the standby's}, error or None): for each interface the primary serves on, the
+    standby's interface on the same IPv4 network (names may differ between machines); one of the same name only
+    when the primary's has no address to go by."""
+    by_name = {i['name']: i for i in primary_live or []}
+    mapping, problems = {}, []
+    for name in served:
+        networks = {a.network for a in interface_networks(by_name.get(name, {}))}
+        same = sorted({i['name'] for i in standby_live or [] for a in interface_networks(i) if a.network in networks})
+        where = ', '.join(str(n) for n in sorted(networks)) or 'its network'
+        if len(same) == 1:
+            mapping[name] = same[0]
+        elif len(same) > 1:
+            problems.append(f"more than one interface of {standby['name']} is on {where}: {', '.join(same)}")
+        elif not networks and name in {i['name'] for i in standby_live or []}:
+            mapping[name] = name            # no address on the primary's to go by: the same name, as before 4.8
+        else:
+            problems.append(f"{standby['name']} has no interface on {where} ({primary['name']}'s {name}): the standby "
+                            'serves the same networks as the primary')
+    return mapping, '; '.join(problems) or None
+
+
 def check_pair(primary, standby, primary_address, standby_address, port, live, served):
     """Errors for pairing `primary` with `standby` (node rows). live: {node id: its interfaces from the agent};
-    served: the interface names the primary serves on (the standby must have the same ones)."""
+    served: the interface names the primary serves on (the standby needs one on each of their networks)."""
     errors = {}
     if not primary or not standby or primary['id'] == standby['id']:
         return {'nodes': 'pick two different DHCP nodes'}
@@ -432,9 +454,7 @@ def check_pair(primary, standby, primary_address, standby_address, port, live, s
         taken = _overlaps_never(ipaddress.ip_network(f'{ip}/32'))
         if taken:
             errors[key] = f'{ip} is on {taken}, which this development instance never serves'
-    names = {i['name'] for i in live.get(standby['id']) or []}
-    missing = [n for n in served if n not in names]
-    if missing:
-        errors['nodes'] = (f"{standby['name']} has no interface named {', '.join(missing)}: the standby serves the "
-                           'same interfaces as the primary, by name')
+    _, problem = match_interfaces(primary, standby, live.get(primary['id']), live.get(standby['id']), served)
+    if problem:
+        errors['nodes'] = problem
     return errors

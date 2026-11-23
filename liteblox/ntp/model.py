@@ -35,6 +35,7 @@ class NtpConfig:
     serve: bool = False
     allow: list = field(default_factory=list)       # networks it serves time to
     local: Optional[int] = None                     # local stratum (orphan) when the upstreams are unreachable
+    chrony_version: Optional[str] = None            # the node's chrony; None: a current one (4.6 and later)
 
 
 def sources(conn):
@@ -66,4 +67,5 @@ def for_node(conn, node, source_list=None, serve=None, allow=None, local=None):
     return NtpConfig(sources=sources(conn) if source_list is None else list(source_list),
                      serve=bool(node['ntp_serve']) if serve is None and 'ntp_serve' in keys else bool(serve),
                      allow=stored_allow if allow is None else list(allow),
-                     local=(node['ntp_local'] if 'ntp_local' in keys else None) if local is None else local or None)
+                     local=(node['ntp_local'] if 'ntp_local' in keys else None) if local is None else local or None,
+                     chrony_version=node['chrony_version'] if 'chrony_version' in keys else None)
