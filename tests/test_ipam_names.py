@@ -85,7 +85,7 @@ def test_save_validate_and_delete(conn):
     with pytest.raises(model.IpamError) as e:
         names.save(conn, '192.0.2.11', 'bad name!', 'zz', '')
     assert set(e.value.errors) == {'name', 'mac'}
-    with pytest.raises(model.IpamError, match='not an IPv4'):
+    with pytest.raises(model.IpamError, match='not an IP address'):
         names.save(conn, '192.0.2.300', 'x')
     with conn:
         conn.execute("INSERT INTO ipam_assignments (ip, kind, name, created_at) VALUES ('192.0.2.12', 'static', "

@@ -23,6 +23,7 @@ Usage:
     ./deploy/deploy.py --archive --build  # multiple steps, always in pipeline order
     ./deploy/deploy.py --bump-patch       # bump patch version + changelog, then all steps
     ./deploy/deploy.py --bump-minor --build
+    ./deploy/deploy.py --bump-to 6.0.0    # a jump (4.8.0 → 6.0.0), forward only
 """
 
 import argparse
@@ -69,12 +70,14 @@ def main():
                       help='increment minor version (1.0.0 → 1.1.0) before running steps')
     bump.add_argument('--bump-major', dest='bump', action='store_const', const='major',
                       help='increment major version (1.0.0 → 2.0.0) before running steps')
+    bump.add_argument('--bump-to', metavar='X.Y.Z',
+                      help='jump to this later version (4.8.0 → 6.0.0) before running steps')
 
     args = parser.parse_args()
     run_all = not any([args.archive, args.build, args.push, args.publish, args.site, args.release])
     if args.dry_run and not args.release:
         parser.error('--dry-run goes with --release')
-    if args.release and args.bump:
+    if args.release and (args.bump or args.bump_to):
         parser.error('--release runs after the release is committed and tagged, not with a bump')
 
     os.chdir(_common.ROOT)
@@ -95,9 +98,17 @@ def main():
     print(f"Registry: {', '.join(registries) or '(none)'}")
     print(f"Current version: {current_version}")
 
-    if args.bump:
-        version = _common.bump_version(current_version, args.bump)
-        print(f"Bumping {args.bump} version: {current_version} → {version}")
+    if args.bump or args.bump_to:
+        if args.bump_to:
+            try:
+                version = _common.bump_to(current_version, args.bump_to)
+            except ValueError as e:
+                print(f"ERROR: {e}")
+                return 1
+            print(f"Bumping to {version}: {current_version} → {version}")
+        else:
+            version = _common.bump_version(current_version, args.bump)
+            print(f"Bumping {args.bump} version: {current_version} → {version}")
 
         changelog_msg = _common.prompt_changelog()
         _common.write_version(version)

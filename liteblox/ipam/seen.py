@@ -5,7 +5,8 @@ stale entry a node keeps for hours doesn't look fresh, and last_seen never moves
 with a different MAC than the one seen last, the change is kept: several changes in a few minutes is flapping,
 two devices on one address, which goes to Needs attention until an admin acknowledges it.
 
-One read a minute catches flapping that lasts a few minutes; ARP sniffing (later) will catch it sooner.
+One read a minute catches flapping that lasts a few minutes; ARP sniffing (later) will catch it sooner. IPv6
+neighbours (NDP) are kept the same way, global and ULA addresses only.
 """
 
 import ipaddress
@@ -13,6 +14,7 @@ import json
 import time
 from dataclasses import dataclass
 
+from ..addrs import sort_key
 from ..search import bare_mac
 
 NOT_A_DEVICE = {'000000000000', 'ffffffffffff'}
@@ -62,12 +64,13 @@ def record(conn, node_id, entries, now=None, source='neigh'):
     seen = []
     for e in entries:
         try:
-            ip = ipaddress.IPv4Address(e.get('ip') or '')
+            ip = ipaddress.ip_address(e.get('ip') or '')
         except ValueError:
             continue
-        # a PERMANENT entry (no confirmed age) was typed in, not seen
+        # a PERMANENT entry (no confirmed age) was typed in, not seen; an IPv6 link-local address (fe80::) is on
+        # every link and says nothing about which address a device uses
         if e.get('confirmed') is None or not _device(e.get('mac')) or ip.is_multicast or ip.is_loopback \
-                or ip.is_unspecified:
+                or ip.is_unspecified or (ip.version == 6 and ip.is_link_local):
             continue
         seen.append((str(ip), mac_text(e['mac']), now - max(0, int(e['confirmed']))))
     seen.sort(key=lambda x: x[2])      # oldest first, so a change is judged against what was seen before it
@@ -143,7 +146,7 @@ def flapping(conn, now=None):
         if len(found) >= cfg.flap_changes:
             macs = sorted({c['old_mac'] for c in found} | {c['new_mac'] for c in found})
             out.append({'ip': ip, 'changes': len(found), 'macs': macs, 'last_at': max(c['at'] for c in found)})
-    return sorted(out, key=lambda x: ipaddress.IPv4Address(x['ip']))
+    return sorted(out, key=lambda x: sort_key(x['ip']))
 
 
 def ack(conn, ip, username, now=None):
@@ -202,28 +205,38 @@ def in_use(latest_seen, hours, now=None):
 
 
 def latest(conn):
-    """{IPv4Address: {mac, last_seen, macs}} for every address seen: its newest MAC, and how many it had."""
+    """{IPv4Address or IPv6Address: {mac, last_seen, macs}} for every address seen: its newest MAC, and how many it
+    had."""
     out = {}
     for r in conn.execute('SELECT ip, mac, last_seen FROM ipam_seen ORDER BY last_seen'):
-        ip = ipaddress.IPv4Address(r['ip'])
+        ip = ipaddress.ip_address(r['ip'])
         held = out.get(ip)
         out[ip] = {'mac': r['mac'], 'last_seen': r['last_seen'], 'macs': (held['macs'] + 1) if held else 1}
     return out
 
 
 def devices(conn):
-    """One row per MAC, like the ARP monitor: [{mac, ip, last_seen, first_seen, earlier: [ips], node, source}],
-    the most recently seen first."""
+    """One row per MAC, like the ARP monitor: [{mac, ip, last_seen, first_seen, earlier: [ips], v6: [ips], node,
+    source}], the most recently seen first. ip is its newest IPv4 address (IPv6 when it has none): a dual-stack
+    device keeps its IPv4 address there, with its IPv6 ones (newest first) in v6."""
     by_mac = {}
     for r in conn.execute('SELECT s.*, n.name AS node FROM ipam_seen s LEFT JOIN nodes n ON n.id = s.node_id '
                           'ORDER BY s.last_seen DESC'):
         d = by_mac.get(r['mac'])
         if d is None:
-            by_mac[r['mac']] = {'mac': r['mac'], 'ip': r['ip'], 'last_seen': r['last_seen'],
-                                'first_seen': r['first_seen'], 'earlier': [], 'node': r['node'], 'source': r['source']}
+            d = by_mac[r['mac']] = {'mac': r['mac'], 'ip': None, 'last_seen': r['last_seen'],
+                                    'first_seen': r['first_seen'], 'earlier': [], 'v6': [], 'node': r['node'],
+                                    'source': r['source']}
+        d['first_seen'] = min(d['first_seen'], r['first_seen'])
+        if ':' in r['ip']:
+            d['v6'].append(r['ip'])
+        elif d['ip'] is None:
+            d['ip'] = r['ip']
         else:
             d['earlier'].append(r['ip'])
-            d['first_seen'] = min(d['first_seen'], r['first_seen'])
+    for d in by_mac.values():
+        if d['ip'] is None:
+            d['ip'] = d['v6'].pop(0)
     return list(by_mac.values())
 
 

@@ -1,0 +1,27 @@
+{# DHCPv6 leases, delegated prefixes and reservations merged (leases.addresses6()); import "with context". The
+   sorting() and filter_box() of partials/dhcp_addresses.html work on it too. #}
+{% macro addresses6_table(rows, subnet, back) -%}
+<div class="table-wrap"><table class="addresses">
+  <thead><tr>{% for key, label in [('ip', 'Address or prefix'), ('mac', 'Client'), ('name', 'Name'), ('state', 'State'), ('lease', 'Lease')] %}<th{% if key == 'ip' %} aria-sort="ascending"{% endif %}><button type="button" class="sort" data-sort="{{ key }}" title="Sort by {{ label|lower }}; click again to reverse">{{ label }}</button></th>{% endfor %}{% if user.is_admin %}<th></th>{% endif %}</tr></thead>
+  <tbody>{% for a in rows %}{% set l = a.lease %}{% set r = a.reservation %}
+  <tr data-search="{{ (a.ip ~ ' ' ~ a.duid ~ ' ' ~ a.mac ~ ' ' ~ a.hostname ~ ' ' ~ a.label ~ ' ' ~ (r.comment if r else ''))|lower }}"
+      data-order="{{ loop.index0 }}" data-mac="{{ (a.duid or a.mac)|lower }}" data-name="{{ a.hostname|lower }}" data-state="{{ a.label }}"
+      data-lease="{{ l.expires_in if l and l.state == 'active' else '' }}">
+    <td>{% if a.ip %}<code>{{ a.ip }}</code>{% if a.kind == 'prefix' %} <span class="pill">prefix</span>{% endif %}{% else %}<span class="muted" title="a name-only reservation: the client gets any pool address">any</span>{% endif %}</td>
+    <td>{% if a.duid %}<code class="small" title="DUID">{{ a.duid }}</code>{% endif %}
+      {%- if a.mac %}<div><a href="/ipam/devices/{{ a.mac|urlencode }}"><code>{{ a.mac }}</code></a>{% set v = vendor(request, a.mac) %}{% if v %} <span class="muted small">{{ v }}</span>{% endif %}</div>{% endif %}
+      {%- if not a.duid and not a.mac %}<span class="muted">none</span>{% endif %}
+      {%- if a.state == 'taken' %}<div class="small muted">held by <code>{{ l.duid }}</code></div>{% endif %}</td>
+    <td>{% if a.zone %}<a href="/zones/{{ a.zone }}"><code>{{ a.hostname }}</code></a> <span class="muted small">in DNS</span>{% elif a.hostname %}<code>{{ a.hostname }}</code>{% else %}<span class="muted">none</span>{% endif %}
+      {%- if r and r.comment %}<div class="muted small">{{ r.comment }}</div>{% endif %}</td>
+    <td><span class="pill {{ a.pill }}">{{ a.label }}</span></td>
+    <td class="nowrap">{% if not l %}<span class="muted">–</span>{% elif l.state != 'active' %}<span class="muted" title="{{ l.expires|localtime }}">{{ l.state }}</span>{% elif l.expires_in > 0 %}<span title="{{ l.expires|localtime }}">ends in {{ l.expires_in|duration }}</span>{% else %}<span class="muted">expired</span>{% endif %}</td>
+    {% if user.is_admin %}<td class="actions">
+      {%- if r %}<a class="small" href="/dhcp/v6/subnets/{{ subnet.id }}/reservations/{{ r.id }}">Edit reservation</a>
+      {%- elif l and l.duid %}<a class="small" href="/dhcp/v6/subnets/{{ subnet.id }}/reservations/new?duid={{ l.duid|urlencode }}&{{ 'prefix' if a.kind == 'prefix' else 'ip' }}={{ a.ip|urlencode }}&hostname={{ l.hostname|urlencode }}" title="keep {{ a.ip }} for this client from now on">Reserve</a>{% endif %}
+      {%- if l and a.node %} <form method="post" action="/dhcp/v6/leases/delete" class="inline" data-confirm="Delete the {{ 'delegated prefix' if a.kind == 'prefix' else 'lease' }} {{ a.ip }}{% if a.zone %} and its DNS name {{ a.hostname }}{% endif %}? The client gets a new one when it next asks." data-confirm-ok="Delete">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="ip" value="{{ a.ip }}"><input type="hidden" name="kind" value="{{ a.kind }}"><input type="hidden" name="node_id" value="{{ a.node.id }}"><input type="hidden" name="back" value="{{ back }}">
+        <button type="submit" class="link danger small">Delete lease</button></form>{% endif %}</td>{% endif %}
+  </tr>{% endfor %}</tbody>
+</table></div>
+{%- endmacro %}

@@ -73,7 +73,7 @@ class Facts:
     def subnet_for(self, ip):
         for s in self.subnets:
             try:
-                if ip in ipaddress.IPv4Network(s.prefix, strict=False):
+                if ip in ipaddress.ip_network(s.prefix, strict=False):
                     return s
             except ValueError:
                 pass
@@ -83,11 +83,13 @@ class Facts:
 def gather(conn, settings, prefix=EVERYTHING, transfer=None):
     from . import devices, names, oui, ptr as rdns, seen
     res = search.search(conn, settings, prefix, limit=math.inf, transfer=transfer)
+    # the IPv4 view: IPv6 addresses have their own (view6)
     facts = Facts(subnets=search.dhcp_model.subnets(conn), errors=list(res.errors), stale=dict(res.stale),
-                  seen=seen.latest(conn), vendors=oui.table(settings), labels=devices.labels(conn),
+                  seen=_v4_only(seen.latest(conn)), vendors=oui.table(settings), labels=devices.labels(conn),
                   repeaters=devices.repeaters(conn),
-                  ipam=names.records(conn), rdns=rdns.cached(conn),
-                  flapping={ipaddress.IPv4Address(f['ip']) for f in seen.flapping(conn)})
+                  ipam=_v4_only(names.records(conn)), rdns=_v4_only(rdns.cached(conn)),
+                  flapping={a for a in map(ipaddress.ip_address, (f['ip'] for f in seen.flapping(conn)))
+                            if a.version == 4})
     facts.reverse_zones = [h['zone']['name'] for h in res.zones.hits if h['zone']['name'].endswith('.in-addr.arpa')]
     for h in res.records.hits:
         rec = h['rec']
@@ -110,6 +112,10 @@ def gather(conn, settings, prefix=EVERYTHING, transfer=None):
     facts.used = sorted({int(ip) for d in (facts.names, facts.ptrs, facts.reservations, facts.leases, facts.in_use,
                                            facts.ipam) for ip in d})
     return facts
+
+
+def _v4_only(d):
+    return {ip: v for ip, v in d.items() if ip.version == 4}
 
 
 # ── one network's figures ──────────────────────────────────────────────────────
@@ -213,9 +219,12 @@ def row(facts, ip, network, ranges, notes):
     rsubnet, r = held[0] if held else (None, None)
     lease_node, active = facts.leases.get(ip, (None, None))
     subnet = facts.subnet_for(ip)
-    in_pool = bool(subnet) and any(a <= ip <= b for a, b in lease_mod.pool_ranges(subnet))
+    pools = lease_mod.pool_ranges6 if ip.version == 6 else lease_mod.pool_ranges
+    in_pool = bool(subnet) and any(a <= ip <= b for a, b in pools(subnet))
     net = network.net
-    kind = 'network' if ip == net.network_address else 'broadcast' if ip == net.broadcast_address else 'host'
+    # IPv6 has no broadcast address; its first is the subnet-router anycast address
+    kind = ('network' if ip == net.network_address else
+            'broadcast' if ip == net.broadcast_address and ip.version == 4 else 'host')
     state = facts.state(ip)
     label, pill = STATES[state]
     record = facts.ipam.get(ip)
@@ -323,7 +332,7 @@ def container_map(facts, network):
     in a /16, a /16 in a /8: 256 cells, fewer below a /22), shaded by how much of it child networks cover."""
     net = network.net
     out = []
-    for block in net.subnets(new_prefix=min(net.prefixlen + 8, 30)):
+    for block in net.subnets(new_prefix=map_prefix(network)):
         covering = [c for c in network.children if c.net.overlaps(block)]
         covered = sum(min(c.net.num_addresses, block.num_addresses) for c in covering)
         share = min(1.0, covered / block.num_addresses)
@@ -335,10 +344,20 @@ def container_map(facts, network):
     return out
 
 
+def map_prefix(network):
+    """The size of a container map's cells: 8 bits below the container (a /24 in a /16), at most a /30 (/126)."""
+    net = network.net
+    return min(net.prefixlen + 8, 30 if net.version == 4 else 126)
+
+
 def container_counts(network):
-    """{'assigned': n, 'free': n} addresses of a container."""
-    assigned = sum(c.net.num_addresses for c in network.children)
-    return {'assigned': assigned, 'free': network.net.num_addresses - assigned}
+    """{'assigned': n, 'free': n, 'unit'} of a container: addresses (IPv4), or /64s for an IPv6 container of a /64
+    or bigger (its addresses would be numbers with 20 digits)."""
+    net = network.net
+    size = 2 ** 64 if net.version == 6 and net.prefixlen <= 64 else 1
+    assigned = sum(max(1, c.net.num_addresses // size) for c in network.children)
+    return {'assigned': assigned, 'free': net.num_addresses // size - assigned,
+            'unit': '/64s' if size > 1 else 'addresses'}
 
 
 def describe(kind):

@@ -181,7 +181,7 @@ def test_kea_is_left_alone(conn, settings, lab, rewrites, monkeypatch, state):  
     fakes[1].kea_sockets = state.split()[0]
     if state == 'down':
         fakes[1].kea_sockets = 'ready'
-        monkeypatch.setattr(health, 'listening', lambda dhcp4: {'status': 'down', 'errors': ['x']})
+        monkeypatch.setattr(health, 'listening', lambda dhcp4, daemon='kea-dhcp4': {'status': 'down', 'errors': ['x']})
     if state == 'failed with drift':          # a rewrite would undo someone's hand edit
         fakes[1].kea_files['kea-dhcp4.conf'] = fakes[1].kea_files['kea-dhcp4.conf'].replace('INFO', 'DEBUG')
     if state == 'failed while busy':

@@ -10,6 +10,18 @@ def _mac(mac):
     return bare_mac(mac)
 
 
+def _subnet_url(r):
+    """A reservation's subnet page (DHCPv6 reservations have a DUID field; their subnets are numbered apart)."""
+    return f"/dhcp/{'v6/' if hasattr(r, 'duid') else ''}subnets/{r.subnet_id}"
+
+
+def _client(x):
+    """Who a reservation or lease is for: its DUID when it has one (DHCPv6), else its MAC, as (label, bare)."""
+    duid = x.get('duid') if isinstance(x, dict) else getattr(x, 'duid', '')
+    mac = x.get('mac') if isinstance(x, dict) else x.hw_address
+    return (duid, _mac(duid)) if duid else (mac or '', _mac(mac) if mac else '')
+
+
 def _named(host, names):
     """True when the short or full host name is one of names (fqdns, lowercase, no trailing dot)."""
     host = (host or '').lower().rstrip('.')
@@ -40,26 +52,30 @@ def address_checks(ip, names, ptrs, rzone, reservation, active, subnet, in_pool,
     for h in ptrs:
         target = h['rec'].target
         if target and target not in a_names:
-            check('warn', f"The PTR points to {target}, but no A record for {target} has this address.",
+            kind = 'AAAA' if ':' in str(ip) else 'A'
+            check('warn', f"The PTR points to {target}, but no {kind} record for {target} has this address.",
                   record_link(h))
     if r and r.hostname and a_names and not _named(r.hostname, a_names):
         check('warn', f"It's reserved for {r.hostname}, but DNS names it {a_names[0]}.",
-              f'/dhcp/subnets/{r.subnet_id}/addresses?filter={ip}')
-    if r and active and _mac(active['mac']) != _mac(r.hw_address):
-        check('warn', f"It's reserved for {r.hw_address}, but {active['mac']} holds the lease.",
-              f'/dhcp/subnets/{r.subnet_id}/addresses?filter={ip}')
+              f'{_subnet_url(r)}/addresses?filter={ip}')
+    if r and active:
+        (want, want_bare), (has, has_bare) = _client(r), _client({'duid': active.get('duid') if getattr(r, 'duid', '')
+                                                                  else '', 'mac': active['mac']})
+        if want_bare and has_bare and want_bare != has_bare:
+            check('warn', f"It's reserved for {want}, but {has} holds the lease.",
+                  f'{_subnet_url(r)}/addresses?filter={ip}')
     if active and active['hostname'] and subnet and subnet.registers:
         # registered at another DNS server: LiteBlox doesn't hold its zones, so only a PTR lookup can tell
         if subnet.ddns_mode != 'external' and not _named(active['hostname'], a_names):
             check('warn', f"The lease's hostname {active['hostname']} isn't in DNS at this address.",
-                  f'/dhcp/subnets/{subnet.id}/addresses?filter={ip}')
+                  f'{subnet.url}/addresses?filter={ip}')
         elif subnet.ddns_mode == 'external' and rdns and rdns['name'] and not _named(active['hostname'],
                                                                                     [rdns['name']]):
             check('warn', f"The lease's hostname is {active['hostname']}, but its PTR at the resolver says "
-                          f"{rdns['name']}.", f'/dhcp/subnets/{subnet.id}/addresses?filter={ip}')
+                          f"{rdns['name']}.", f'{subnet.url}/addresses?filter={ip}')
     other = seen and not any(_mac(seen['mac']) == _mac(m) for m in repeaters)
-    if other and r and _mac(seen['mac']) != _mac(r.hw_address) and not (active and _mac(active['mac']) ==
-                                                                       _mac(seen['mac'])):
+    if other and r and r.hw_address and _mac(seen['mac']) != _mac(r.hw_address) and not (
+            active and active['mac'] and _mac(active['mac']) == _mac(seen['mac'])):
         check('warn', f"It's reserved for {r.hw_address}, but the nodes last saw {seen['mac']} on it.",
               f'/ipam/seen?q={ip}')
     if ipam and rdns and rdns['name'] and not (_named(ipam['name'], [rdns['name']]) or
@@ -74,7 +90,7 @@ def address_checks(ip, names, ptrs, rzone, reservation, active, subnet, in_pool,
     if names and in_pool and not r and not (active and active['hostname']):
         check('warn', f"{names[0]['rec'].fqdn} points here, but the address is in {subnet.prefix}'s pool with "
                       "no reservation: DHCP can hand it to another client.",
-              f'/dhcp/subnets/{subnet.id}/settings')
+              f'{subnet.url}/settings')
     return checks
 
 

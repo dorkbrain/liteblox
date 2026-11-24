@@ -607,6 +607,87 @@ MIGRATIONS = [
     ALTER TABLE nodes ADD COLUMN kea_version TEXT;
     ALTER TABLE nodes ADD COLUMN chrony_version TEXT;
     """,
+    # v43 (6.0): DHCPv6. Kea's kea-dhcp6 beside kea-dhcp4 on every DHCP node (nodes.dhcp6 once Repair set it up),
+    # its own settings, subnets (address pools and delegated-prefix pools) and reservations (by DUID or MAC). The
+    # failover pair serves both families: kea-dhcp6 listens for its partner on port6. A subnet may send router
+    # advertisements from its serving nodes (ra, off by default; ra_slaac lets clients pick their own address too)
+    """
+    ALTER TABLE nodes ADD COLUMN dhcp6 INTEGER NOT NULL DEFAULT 0;    -- 1 once LiteBlox set kea-dhcp6 up there
+    ALTER TABLE nodes ADD COLUMN dhcp6_ha_state TEXT;
+    ALTER TABLE nodes ADD COLUMN dhcp6_ha_checked_at TEXT;
+    ALTER TABLE nodes ADD COLUMN dhcp6_sockets TEXT;
+    ALTER TABLE dhcp4_ha ADD COLUMN port6 INTEGER NOT NULL DEFAULT 8002;
+    CREATE TABLE dhcp6_settings (
+        id                 INTEGER PRIMARY KEY CHECK (id = 1),
+        preferred_lifetime INTEGER,                   -- NULL: Kea's default
+        valid_lifetime     INTEGER,
+        renew_timer        INTEGER,
+        rebind_timer       INTEGER,
+        options            TEXT NOT NULL DEFAULT '{}',    -- JSON {dns, search, ntp}
+        extra_options      TEXT NOT NULL DEFAULT '[]'
+    );
+    INSERT INTO dhcp6_settings (id) VALUES (1);
+    CREATE TABLE dhcp6_subnets (
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,   -- Kea's subnet-id in kea-dhcp6: never reused
+        prefix             TEXT NOT NULL UNIQUE,
+        interface          TEXT NOT NULL,             -- the primary's name, as for DHCPv4
+        pools              TEXT NOT NULL DEFAULT '',  -- one "a - b" or prefix per line
+        pd_pools           TEXT NOT NULL DEFAULT '[]',    -- JSON [{prefix: 'p/len', delegated_len}]
+        options            TEXT NOT NULL DEFAULT '{}',
+        extra_options      TEXT NOT NULL DEFAULT '[]',
+        extra              TEXT NOT NULL DEFAULT '{}',
+        preferred_lifetime INTEGER,
+        valid_lifetime     INTEGER,
+        renew_timer        INTEGER,
+        rebind_timer       INTEGER,
+        comment            TEXT NOT NULL DEFAULT '',
+        ddns               INTEGER NOT NULL DEFAULT 0,
+        ddns_zone_id       INTEGER REFERENCES zones(id),
+        ddns_suffix        TEXT NOT NULL DEFAULT '',
+        ddns_reverse       TEXT NOT NULL DEFAULT '',
+        ra                 INTEGER NOT NULL DEFAULT 0,
+        ra_slaac           INTEGER NOT NULL DEFAULT 0,
+        ra_since           TEXT,                      -- when RA was last turned on (the dev backstop)
+        created_at         TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE dhcp6_reservations (
+        id          INTEGER PRIMARY KEY,
+        subnet_id   INTEGER NOT NULL REFERENCES dhcp6_subnets(id) ON DELETE CASCADE,
+        duid        TEXT NOT NULL DEFAULT '',          -- 00:01:00:01:...; '' when by MAC
+        hw_address  TEXT NOT NULL DEFAULT '',          -- aa:bb:cc:dd:ee:ff; '' when by DUID
+        ip_address  TEXT NOT NULL DEFAULT '',          -- '': no address (a prefix only, or name only)
+        prefix      TEXT NOT NULL DEFAULT '',          -- a delegated prefix, or ''
+        hostname    TEXT NOT NULL DEFAULT '',
+        options     TEXT NOT NULL DEFAULT '{}',
+        comment     TEXT NOT NULL DEFAULT '',
+        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        CHECK (duid != '' OR hw_address != '')
+    );
+    CREATE UNIQUE INDEX dhcp6_reservations_duid ON dhcp6_reservations (subnet_id, duid) WHERE duid != '';
+    CREATE UNIQUE INDEX dhcp6_reservations_mac ON dhcp6_reservations (subnet_id, hw_address) WHERE hw_address != '';
+    CREATE UNIQUE INDEX dhcp6_reservations_ip ON dhcp6_reservations (subnet_id, ip_address) WHERE ip_address != '';
+    CREATE UNIQUE INDEX dhcp6_reservations_prefix ON dhcp6_reservations (subnet_id, prefix) WHERE prefix != '';
+    """,
+    # 44: DHCPv6's lease graphs (6.0): samples per DHCPv6 subnet (metrics leases6_active, leases6_in_pool,
+    # prefixes6_active)
+    """
+    ALTER TABLE samples ADD COLUMN subnet6_id INTEGER REFERENCES dhcp6_subnets(id) ON DELETE CASCADE;
+    DROP INDEX samples_series;
+    CREATE INDEX samples_series ON samples (metric, node_id, subnet_id, subnet6_id, at);
+    """,
+    # 45: router advertisements (6.0): radvd on a DHCP node, set up at Repair when asked (the agent reports it), and
+    # whether it's running as LiteBlox last saw it (radvd_state: JSON {active, interfaces}, NULL: not reported)
+    """
+    ALTER TABLE nodes ADD COLUMN radvd INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE nodes ADD COLUMN radvd_state TEXT;
+    """,
+    # 46: which of the distro's include files the node still has (JSON list from the agent's status; NULL: not
+    # reported yet), so an OS upgrade that drops one (Ubuntu 26.04: named.conf.default-zones) doesn't break named.conf;
+    # and whether named-checkconf passes there (NULL: not reported), for Needs attention
+    """
+    ALTER TABLE nodes ADD COLUMN distro_present TEXT;
+    ALTER TABLE nodes ADD COLUMN checkconf_ok INTEGER;
+    """,
 ]
 
 

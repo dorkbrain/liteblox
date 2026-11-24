@@ -389,6 +389,7 @@ def node_bootstrap_form(request: Request, node_id: int, user: User = Depends(req
     return templates.TemplateResponse(request, 'node_bootstrap.html', {
         'user': user, 'node': node, 'insecure': _insecure(request),
         'dhcp': bool(node['dhcp']) or q.get('dhcp') == '1', 'ntp': bool(node['ntp']) or q.get('ntp') == '1',
+        'radvd': bool(node['radvd']) or q.get('radvd') == '1',
         'takeover': not node['agent_version'] and not node['managed'],
         # the BIND box: while nothing in LiteBlox needs the node's BIND, and (to add BIND) the DNS module is on
         'bind_fixed': service.bind_change_blocked(conn, node), 'dns_on': _dns_on(request)})
@@ -404,7 +405,7 @@ def node_bootstrap(request: Request, node_id: int, ssh_user: str = Form(...), ss
                    sudo_password: str = Form(''), install_bind: bool = Form(False),
                    fix_permissions: bool = Form(False),
                    takeover: bool = Form(False), dhcp: bool = Form(False), ntp: bool = Form(False),
-                   services: str = Form(''), bind: str = Form(''),
+                   radvd: bool = Form(False), services: str = Form(''), bind: str = Form(''),
                    user: User = Depends(require_admin),
                    conn=Depends(get_db)):
     node = _node_or_404(conn, node_id)
@@ -414,7 +415,7 @@ def node_bootstrap(request: Request, node_id: int, ssh_user: str = Form(...), ss
     if services and not service.bind_change_blocked(conn, node):
         chosen = bind in ('1', 'true', 'on') and (_dns_on(request) or bool(node['bind']))
     options = Options(bind=chosen, install_bind=install_bind, fix_permissions=fix_permissions, takeover=takeover,
-                      dhcp=dhcp, ntp=ntp)
+                      dhcp=dhcp, ntp=ntp, radvd=radvd)
     job_id = service.start_bootstrap(_settings(request), node['id'], creds, options, user.username)
     return RedirectResponse(f'/jobs/{job_id}', status_code=303)
 

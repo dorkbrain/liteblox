@@ -202,3 +202,49 @@ def test_a_behind_node_with_drift_is_left_for_its_overwrite(conn, settings, pair
     line = health.check_node(settings, conn, node(conn, 2), background=False)
     assert 'changed outside LiteBlox' in line and 'behind' not in line
     assert conn.execute("SELECT COUNT(*) FROM jobs WHERE kind = 'bind config'").fetchone()[0] == 0
+
+
+def test_an_os_upgrade_that_drops_a_distro_include_is_written_around(conn, settings, pair):
+    """Ubuntu 26.04's bind9 has no named.conf.default-zones: the generated named.conf must stop including it
+    (named-checkconf fails, so the package's postinst and the next named start do), with root-hints instead."""
+    fakes = pair[0]
+    zones, hints, rndc = ('/etc/bind/named.conf.default-zones', '/etc/bind/named.conf.root-hints',
+                          '/etc/bind/rndc.key')
+    with conn:
+        conn.execute('UPDATE nodes SET distro_includes = ? WHERE id = 1', (json.dumps([zones, rndc]),))
+    apply.rewrite(settings, 1, 'admin', 'setup', print)
+    assert f'include "{zones}";' in fakes[1].config_files['named.conf'] and not apply.stale(conn, node(conn, 1))
+
+    real = fakes[1].status
+    fakes[1].status = lambda: {**real(), 'bind': True, 'distro_includes': [hints, rndc]}   # after the upgrade
+    line = health.check_node(settings, conn, node(conn, 1), background=False)
+    assert line == 'ns1: ok; its BIND config is behind: rewriting it'
+    named_conf = fakes[1].config_files['named.conf']
+    assert zones not in named_conf and f'include "{hints}";' in named_conf and f'include "{rndc}";' in named_conf
+    assert json.loads(node(conn, 1)['distro_present']) == [hints, rndc] and not apply.stale(conn, node(conn, 1))
+
+
+def test_distro_includes_as_kept_until_the_agent_says():
+    from liteblox.bindconf.model import distro_includes
+    zones, hints = '/etc/bind/named.conf.default-zones', '/etc/bind/named.conf.root-hints'
+    kept = json.dumps([zones, '/etc/bind/rndc.key'])
+    assert distro_includes({'distro_includes': kept, 'distro_present': None}) == [zones, '/etc/bind/rndc.key']
+    assert distro_includes({'distro_includes': kept}) == [zones, '/etc/bind/rndc.key']       # an older row
+    assert distro_includes({'distro_includes': kept, 'distro_present': json.dumps([zones, hints])}) == [zones]
+    # gone without a root-hints file to take its place: left out
+    assert distro_includes({'distro_includes': kept, 'distro_present': '[]'}) == []
+    assert distro_includes({'distro_includes': json.dumps([zones, hints]),
+                            'distro_present': json.dumps([hints])}) == [hints]
+
+
+def test_a_failing_named_checkconf_needs_attention(conn, settings, pair):
+    from liteblox import status
+    fakes = pair[0]
+    real = fakes[1].status
+    fakes[1].status = lambda: {**real(), 'bind': True, 'taken_over': True, 'checkconf_ok': False}
+    health.check_node(settings, conn, node(conn, 1), background=False)
+    found = [p['what'] for p in status.problems(conn, settings) if p['node'] == 'ns1']
+    assert any('named-checkconf fails' in w for w in found)
+    fakes[1].status = lambda: {**real(), 'bind': True, 'taken_over': True, 'checkconf_ok': True}
+    health.check_node(settings, conn, node(conn, 1), background=False)
+    assert not [p for p in status.problems(conn, settings) if 'named-checkconf' in p['what']]

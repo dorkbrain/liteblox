@@ -143,6 +143,14 @@ A new LiteBlox version may ship a new agent. The Nodes list then marks those nod
     - Only the agent's own code changes this way. Its systemd unit, the installer, its config and its certificates change only by Repair.
 - **Repair / upgrade agent** (over SSH, with the setup account) is still needed the first time, to put the installer on a node, and whenever a version changes more than the agent's code: the node's page says which. It also goes back to an older agent, which Upgrade agent refuses. Nothing that's already in place is changed.
 
+## Upgrading to 6.0
+
+6.0 adds [IPv6](/help/ipv6): DHCPv6, optional router advertisements, IPv6 in IPAM, Search and the API, and time over IPv6. (There's no 5.x: the version jumps to match IPv6, and 4.x is the last IPv4-only line.)
+
+- **Run Repair / upgrade agent once on each node** (Upgrade agent isn't enough: the setup changed). On a DHCP node, Repair installs `kea-dhcp6-server` and its socket proxy, and kea-dhcp6 starts with nothing to serve; DHCPv4 keeps serving throughout. Until a DHCP node is repaired, the DHCP tab says so and IPv6 subnets can't be added. Tick **Router advertisements (radvd)** only on nodes that should send them; it's off by default.
+- Nothing else changes: no IPv6 is served, and no router advertisement sent, until you add an IPv6 subnet and turn them on.
+- If the nodes have a firewall, open UDP 547 for an IPv6 subnet's clients and TCP 8002 between a failover pair ([Firewall](/help/node-prep#7-firewall)).
+
 ## Upgrading to 4.6
 
 4.6 adds LiteBlox's own [HTTPS](/help/https), off until you turn it on. To use it, add the port to `docker-compose.yaml` and recreate the container:

@@ -1,0 +1,20 @@
+{% extends 'base.html' %}
+{% from 'partials/dhcp_addresses.html' import counts, filter_box, sorting with context %}
+{% from 'partials/dhcp6_addresses.html' import addresses6_table with context %}
+{% block title %}Addresses · {{ subnet.prefix }} · DHCP · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+{% include 'partials/dhcp6_subnet_tabs.html' %}
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if done %}<p class="notice">{{ done }}</p>{% endif %}
+{% for e in errors %}<p class="error">{{ e }}</p>{% endfor %}
+<section class="card">
+  <div class="toolbar">{{ filter_box() }}<span class="muted small">{{ counts(tally) }}, read from Kea just now</span>
+    <a class="small" href="/dhcp/v6/subnets/{{ subnet.id }}/addresses.csv" title="Download this table as CSV, read from Kea again">Export CSV</a></div>
+  {% if rows %}{{ addresses6_table(rows, subnet, '/dhcp/v6/subnets/' ~ subnet.id ~ '/addresses') }}
+  {% elif not serving %}<p class="muted">No node serves DHCP yet.</p>
+  {% else %}<p class="muted">No leases or reservations yet.{% if user.is_admin %} <a href="/dhcp/v6/subnets/{{ subnet.id }}/reservations/new">Add a reservation</a>, or <strong>Reserve</strong> a client's lease here once it has one.{% endif %}</p>{% endif %}
+</section>
+<p class="muted small">A DHCPv6 client is known by its DUID, which stays the same across its network cards; a MAC only works when Kea can learn it from the client's packets. <strong>Reserve</strong> on a lease keeps what it has now for that DUID.</p>
+{{ sorting() }}
+{% endblock %}

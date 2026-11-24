@@ -11,11 +11,14 @@
 {% if diff %}<details><summary>The changes</summary><pre class="log">{{ diff }}</pre></details>{% endif %}{% endif %}
 <dl class="facts">
   <dt>Kea</dt><dd>{{ kea.version or 'version unknown' }}</dd>
-  {% for service, label in [('dhcp4', 'kea-dhcp4'), ('d2', 'DDNS (D2)')] %}{% set s = kea.services[service] %}
+  {% for service, label in [('dhcp4', 'kea-dhcp4'), ('dhcp6', 'kea-dhcp6'), ('d2', 'DDNS (D2)')] if service in (kea.services or {}) %}{% set s = kea.services[service] %}
   <dt>{{ label }}</dt><dd>{% if s.running %}<span class="pill ready">running</span> <span class="muted small">pid {{ s.pid }}, up {{ s.uptime|duration }}{% if s.reload is not none %}, config loaded {{ s.reload|duration }} ago{% endif %}</span>{% if s.sockets and s.sockets.status != 'ready' %}
     <br><span class="pill {{ 'warn' if s.sockets.status == 'retrying' else 'error' }}">{{ 'not listening yet, retrying' if s.sockets.status == 'retrying' else 'not listening' }}</span> <span class="small">{{ (s.sockets.errors or [])|join('; ') }}</span>{% endif %}
     {% else %}<span class="pill error">not answering</span> <span class="small">{{ s.error }}</span>{% endif %}</dd>
   {% endfor %}
+  {% set ra = status.ra or {} %}
+  <dt>Router advertisements</dt><dd>{% if ra.ready %}{% if ra.interfaces %}{% if ra.active %}<span class="pill ready">radvd sending</span>{% else %}<span class="pill error">radvd not running</span>{% endif %} <span class="small">on {{ ra.interfaces|join(', ') }}</span>{% elif ra.active %}<span class="pill warn">radvd running</span> <span class="small">with no LiteBlox interface</span>{% else %}<span class="muted">radvd set up, off (no subnet sends them)</span>{% endif %}{% if not ra.in_place %} <span class="pill error">config not in place</span>{% endif %}
+    {% else %}<span class="muted">from your router{% if user.is_admin %} (<a href="/nodes/{{ node.id }}/bootstrap?radvd=1">set up radvd</a> to send them from here){% endif %}</span>{% endif %}</dd>
   <dt>Serving</dt><dd>{% if served %}{% for name in served %}<div><code>{{ name }}</code>: {% for s in subnets if s.interface == name %}<a href="/dhcp/subnets/{{ s.id }}"><code>{{ s.prefix }}</code></a>{% if not loop.last %}, {% endif %}{% else %}<span class="muted">no subnet yet</span>{% endfor %}</div>{% endfor %}
     {% else %}no interface: nothing answers DHCP{% endif %} <a class="small" href="/dhcp">DHCP</a></dd>
   <dt>Interfaces</dt><dd>{% for i in status.interfaces or [] %}<div><code>{{ i.name }}</code> {{ i.addresses|join(', ') or 'no address' }}{% if not i.up %} <span class="pill warn">down</span>{% endif %}

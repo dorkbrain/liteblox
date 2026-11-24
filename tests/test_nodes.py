@@ -208,26 +208,28 @@ def test_bootstrap_form_ticks_from_the_nodes_state(admin, conn):
     add_node(conn)
     fresh = admin.get('/nodes/1/bootstrap').text
     assert _boxes(fresh) == {'bind': True, 'takeover': True, 'fix_permissions': True, 'install_bind': True,
-                             'dhcp': False, 'ntp': False}
+                             'dhcp': False, 'radvd': False, 'ntp': False}
     assert 'Run setup' in fresh and 'install the agent' in fresh and 'Set up Kea DHCP' in fresh
     assert _boxes(admin.get('/nodes/1/bootstrap?dhcp=1&ntp=1').text)['dhcp'] is True
+    assert _boxes(admin.get('/nodes/1/bootstrap?radvd=1').text)['radvd'] is True
 
     # set up, managed, with DHCP and time sync: a repair keeps them; the takeover box gives way to a line
     with conn:
-        conn.execute("UPDATE nodes SET status = 'ready', agent_version = '3.3.0', managed = 1, dhcp = 1, ntp = 1 "
-                     "WHERE id = 1")
+        conn.execute("UPDATE nodes SET status = 'ready', agent_version = '3.3.0', managed = 1, dhcp = 1, ntp = 1, "
+                     "radvd = 1 WHERE id = 1")
     page = admin.get('/nodes/1/bootstrap').text
-    assert _boxes(page) == {'fix_permissions': True, 'install_bind': True, 'dhcp': True, 'ntp': True}
+    assert _boxes(page) == {'fix_permissions': True, 'install_bind': True, 'dhcp': True, 'radvd': True, 'ntp': True}
+    assert 'Keep router advertisements (radvd, set up)' in page
     assert 'already manages this node' in page and 'Keep DHCP (set up)' in page and 'Leave Kea alone' in page
     assert 'Keep time sync (set up)' in page and 'Leave chrony alone' in page
     assert 'upgrade the agent to' in page and '(from 3.3.0)' in page and 'Repair / upgrade</button>' in page
 
     # set up but kept its own BIND config: the takeover box is there, unticked
     with conn:
-        conn.execute('UPDATE nodes SET managed = 0, dhcp = 0, ntp = 0 WHERE id = 1')
+        conn.execute('UPDATE nodes SET managed = 0, dhcp = 0, ntp = 0, radvd = 0 WHERE id = 1')
     page = admin.get('/nodes/1/bootstrap').text
     assert _boxes(page) == {'bind': True, 'takeover': False, 'fix_permissions': True, 'install_bind': True,
-                            'dhcp': False, 'ntp': False}
+                            'dhcp': False, 'radvd': False, 'ntp': False}
     assert 'Leave the BIND config as it is' in page and 'No DHCP on this node' in page
 
 
@@ -379,6 +381,8 @@ def test_bootstrap_sets_up_kea_masked_and_serving_nothing(tmp_path, monkeypatch)
     assert joined.index('install -m 0640 -o liteblox-agent -g _kea') < joined.index('-t /etc/kea/kea-dhcp4.conf') \
         < joined.index('systemctl unmask')
     assert 'usermod -aG _kea liteblox-agent && chgrp _kea /etc/kea && chmod 2770 /etc/kea' in joined
+    # kept by dpkg across kea-common upgrades (its postinst's statoverride says 0750)
+    assert 'dpkg-statoverride --add $(stat -c "%U %G" /etc/kea) 2770 /etc/kea' in joined
     kea_files, agent_files = FakeRemote.last.uploads
     conf = json.loads(kea_files['kea-dhcp4.conf'])['Dhcp4']
     assert conf['interfaces-config']['interfaces'] == []                    # serves nothing
@@ -389,7 +393,7 @@ def test_bootstrap_sets_up_kea_masked_and_serving_nothing(tmp_path, monkeypatch)
     assert re.search(r'^SupplementaryGroups=bind _kea$', unit, re.M)
     assert re.search(r'^ReadWritePaths=.* /etc/kea$', unit, re.M)
     assert node['dhcp_setup']['dhcp'] == 1 and node['dhcp_setup']['kea_hooks_dir'].startswith('/usr/lib/aarch64')
-    assert json.loads(node['dhcp_setup']['dhcp_files']).keys() == {'kea-dhcp4.conf', 'kea-dhcp-ddns.conf'}
+    assert json.loads(node['dhcp_setup']['dhcp_files']).keys() == {'kea-dhcp4.conf', 'kea-dhcp6.conf', 'kea-dhcp-ddns.conf'}
 
 
 def test_a_repair_keeps_the_agents_access_to_kea(tmp_path, monkeypatch):
@@ -677,3 +681,25 @@ def test_bootstrap_gives_up_on_an_agent_that_never_answers(monkeypatch):
     with pytest.raises(bootstrap_mod.BootstrapError, match='within 90 s'):
         bootstrap_mod._verify({'host': '192.0.2.9', 'agent_port': 8530}, None, lambda line: None)
     assert 90 <= clock.now < 92
+
+
+def test_bootstrap_check_names_kea_dhcp6(monkeypatch):
+    class Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def status(self):
+            return {'bind': False, 'agent_version': '6.0.0',
+                    'kea': {'installed': True, 'version': '2.6.3',
+                            'services': {'dhcp4': {'running': True}, 'dhcp6': {'running': False, 'error': 'refused'},
+                                         'd2': {'running': True}}}}
+    monkeypatch.setattr(bootstrap_mod, 'AgentClient', Client)
+    lines = []
+    bootstrap_mod._verify({'host': '192.0.2.9', 'agent_port': 8530}, None, lines.append)
+    assert '  Kea 2.6.3: dhcp4 running, dhcp6 NOT reachable (refused), D2 running' in lines

@@ -14,6 +14,7 @@
       <label>Name <input name="name" value="{{ network.name }}" placeholder="{{ network.prefix }}"></label>
       <label>Comment <input name="comment" value="{{ network.comment }}"></label>
     </div>
+    {% if network.version == 4 %}
     <h3>Sweep</h3>
     <p class="small muted">Probe every address now and then through a node on this network, so quiet devices show up in <a href="/ipam/seen">Devices seen</a>. 64 at a time, 10 a second. <a href="/help/ipam#the-sweep">More in Help</a>.</p>
     <div class="row">
@@ -21,9 +22,10 @@
       <label>From <select name="sweep_node"><option value="">the first node on it (a scanner if there is one)</option>{% for n in sweep_nodes %}<option value="{{ n.id }}"{% if network.sweep_node_id == n.id %} selected{% endif %}>{{ n.name }}{% if not (n.bind or n.dhcp or n.ntp) %} (scanner){% endif %}</option>{% endfor %}</select></label>
     </div>
     <p class="small muted">{% if sweep_problem %}{{ sweep_problem|capitalize }}.{% elif network.swept_at %}Last swept {{ network.swept_at|localtime }}.{% else %}Not swept yet.{% endif %}</p>
+    {% else %}<p class="small muted">An IPv6 network isn't swept (a /64 has 2<sup>64</sup> addresses): the nodes' neighbour tables (NDP) show what's there. <a href="/help/ipam#ipv6-networks">More in Help</a>.</p>{% endif %}
     {% call action_bar(cancel=base) %}<button type="submit">Save</button>{% endcall %}
   </form>
-  {% if not sweep_problem %}
+  {% if not sweep_problem and network.version == 4 %}
   <form method="post" action="{{ base }}/sweep" class="spaced" data-confirm="Sweep {{ network.prefix }} now? It probes every address from a node on it, as a job." data-confirm-ok="Sweep">
     <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button type="submit" class="secondary">Sweep now</button></form>
   {% endif %}

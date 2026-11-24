@@ -1,0 +1,61 @@
+{% extends 'ipam_base.html' %}
+{% from 'partials/ipam_map.html' import donut %}
+{% from 'partials/dhcp_addresses.html' import filter_box, sorting with context %}
+{% block title %}{{ network.label }} · IPAM · LiteBlox{% endblock %}
+{% set base = '/ipam/networks/' ~ network.id %}
+{% block ipam %}
+<div class="heading">
+  <h1>{% for p in path %}<a href="/ipam/networks/{{ p.id }}">{{ p.label }}</a> · {% endfor %}{{ network.label }}{% if network.name %} <code class="muted">{{ network.prefix }}</code>{% endif %}</h1>
+  {% if user.is_admin %}<a class="button secondary" href="{{ base }}/settings">Settings</a>{% endif %}
+</div>
+<p class="page-intro muted small">
+  {%- if network.comment %}{{ network.comment }} · {% endif %}An IPv6 network: too big to map or count free addresses, so this page lists the addresses LiteBlox knows of here
+  {%- if probe_nodes %} · seen from {% for n in probe_nodes %}<a href="/nodes/{{ n.id }}">{{ n.name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
+  {%- else %} · no LiteBlox node is on this network: its page shows DNS and DHCP only, and nothing can be checked from here{% endif %}. <a href="/help/ipam#ipv6-networks">More in Help</a>.</p>
+{% for w in warnings %}<p class="notice small">{{ w }}</p>{% endfor %}
+{% for r in flapping %}<p class="notice flap"><strong><a href="/search?q={{ r.ip }}#address">{{ r.ip }}</a></strong>: {{ r.macs|length }} different MACs ({{ r.changes }} changes in a few minutes): two devices may be using this address.</p>{% endfor %}
+
+<div class="ipam-top">
+  <section class="card">
+    <h2>Overview</h2>
+    <dl class="facts">
+      <dt>DHCPv6</dt><dd>{% for s in subnets %}<a href="{{ s.url }}"><code>{{ s.prefix }}</code></a>{% if s.ra %} <span class="pill warn" title="the serving nodes send router advertisements">RA on</span>{% endif %}{% if not loop.last %}, {% endif %}{% else %}<span class="muted">no DHCPv6 subnet here</span>{% endfor %}</dd>
+      <dt>Ranges</dt><dd>{% for r in ranges %}{{ r.label }} <code class="small">{{ r.first }} – {{ r.last }}</code>{% if not loop.last %}<br>{% endif %}{% else %}<span class="muted">none</span>{% endfor %}</dd>
+      <dt>Delegated</dt><dd>{{ prefixes|length }} prefix{{ '' if prefixes|length == 1 else 'es' }}</dd>
+    </dl>
+  </section>
+  <section class="card">
+    <h2>Known addresses</h2>
+    {{ donut(segments, [('reserved', 'Reserved', counts.reserved), ('named', 'Named in IPAM', counts.named), ('leased', 'Leased', counts.leased), ('dns', 'DNS only', counts.dns), ('seen', 'Seen only', counts.seen)], (counts.values()|sum) ~ ' in use') }}
+    <p class="small">{{ counts.values()|sum }} in use{% if rows|length > counts.values()|sum %}, {{ rows|length - counts.values()|sum }} more seen earlier or noted{% endif %}</p>
+  </section>
+</div>
+
+{% if prefixes %}
+<section class="card spaced" id="prefixes">
+  <h2>Delegated prefixes <span class="count">{{ prefixes|length }}</span></h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Prefix</th><th>Client</th><th>Name</th><th>DHCP</th><th>Subnet</th></tr></thead>
+    <tbody>{% for p in prefixes %}
+    <tr><td><code>{{ p.prefix }}</code></td><td><code class="small">{{ p.client }}</code></td>
+      <td>{% if p.hostname %}<code>{{ p.hostname }}</code>{% else %}<span class="muted">none</span>{% endif %}</td>
+      <td class="small nowrap">{% if p.reservation %}<a href="{{ p.subnet.url }}/reservations/{{ p.reservation.id }}">reserved</a>{% if p.lease %} · delegated{% endif %}{% elif p.lease %}<span title="{{ p.lease.expires|localtime }}">delegated{% if p.lease.expires_in > 0 %}, ends in {{ p.lease.expires_in|duration }}{% endif %}</span>{% endif %}</td>
+      <td><a href="{{ p.subnet.url }}"><code>{{ p.subnet.prefix }}</code></a></td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  <p class="muted small">Prefixes Kea delegated to routers (or holds for them). Your router needs a route to each, through the router that got it.</p>
+</section>
+{% endif %}
+
+<section class="card spaced">
+  <div class="toolbar">
+    <h2 class="grow">Addresses</h2>
+    {{ filter_box() }}
+    <a class="small" href="{{ base }}/addresses.csv" title="Download the addresses listed here as CSV">Export CSV</a>
+  </div>
+  {% include 'partials/ipam_address_table.html' %}
+  {% if not rows %}<p class="muted">Nothing known here yet: no AAAA record, DHCPv6 lease or reservation, IPAM record, or device the nodes saw.</p>{% endif %}
+</section>
+<p class="muted small">Names come from every zone's AAAA and PTR records (static zones as drafted), IPAM's own records{% if resolver %}, the PTRs at {{ resolver }} (rDNS){% endif %}, and DHCPv6 from LiteBlox and Kea just now. The nodes see IPv6 devices in their neighbour tables (NDP); privacy addresses come and go, and drop off after IPAM's keep time. A comment is saved where it lives: on the AAAA record (a draft in its zone), on the reservation, on the IPAM record, or as an IPAM note.</p>
+{{ sorting() }}
+{% endblock %}

@@ -37,6 +37,7 @@ tagline: A web console that runs your DNS, DHCP and time servers, and keeps trac
 - Subnets, pools, options and reservations; a live leases view.
 - Clients registered in DNS automatically: in LiteBlox's own zones (following whichever server is the DNS primary), or at another DNS server with a TSIG key.
 - A hot-standby failover pair over mutual TLS.
+- **IPv6 (6.0):** DHCPv6 with address pools, delegated prefixes for routers, reservations by DUID or MAC and AAAA + PTR registration; router advertisements from the servers if your router doesn't send them (off by default, never a default route).
 - Names whose removal from DNS was lost are found and, if you like, cleaned up hourly.
 
 </section>
@@ -45,7 +46,7 @@ tagline: A web console that runs your DNS, DHCP and time servers, and keeps trac
 
 ### Time (chrony, optional)
 
-- One source list for every node; the nodes serve time to your network, and keep agreeing with each other if the internet goes away.
+- One source list for every node; the nodes serve time to your network (IPv4 and IPv6), and keep agreeing with each other if the internet goes away.
 
 </section>
 
@@ -55,6 +56,7 @@ tagline: A web console that runs your DNS, DHCP and time servers, and keeps trac
 
 - Networks and named ranges, nested per site, with a map of every address and what uses it, read live from DNS and DHCP: nothing to keep in sync. Without LiteBlox's DNS, names are kept in IPAM and looked up as PTRs at your resolver.
 - Devices seen on the network (from the servers' ARP tables, with vendor names), labels per device, and a warning when two devices fight over one address.
+- IPv6 networks list every address DNS, DHCPv6 and the servers' neighbour tables know of there.
 - "Give me the next free address" (or a block of them), checked with a ping first, from the API or a small command-line client that can also name them and take them away again.
 
 </section>
@@ -85,17 +87,17 @@ tagline: A web console that runs your DNS, DHCP and time servers, and keeps trac
 ![Editing DNS records in a LiteBlox zone](/img/zone-records.png)
 *Editing a zone row by row: changes go into a draft, reviewed as a diff, then published.*
 
-![A DHCP subnet's leases and reservations in LiteBlox](/img/dhcp-addresses.png)
-*A DHCP subnet's addresses: live leases and reservations in one sortable table.*
+![A DHCPv6 subnet's leases and reservations in LiteBlox](/img/dhcp-addresses.png)
+*A DHCPv6 subnet's addresses: live leases and reservations (by DUID or MAC) in one sortable table.*
 
 ![The LiteBlox Nodes list](/img/nodes.png)
 *The nodes: the primary, its secondary and a scanner node, with their agents and BIND versions.*
 
-![LiteBlox search results for one IP address](/img/search.png)
-*Searching one address: its names, PTR, reservation, lease and subnet, and what doesn't add up.*
+![LiteBlox search results for a dual-stack name](/img/search.png)
+*Searching a name: its A and AAAA records, both PTRs, its reservation and its IPv4 and IPv6 leases, from every zone and DHCP at once.*
 
-![A LiteBlox IPAM network with its address map](/img/ipam.png)
-*IPAM: a network's address map, its usage, and every address, used and free, with names, MACs and vendors.*
+![A LiteBlox IPAM page for an IPv6 network](/img/ipam.png)
+*IPAM on an IPv6 network: every address DNS, DHCPv6 and the nodes' neighbour tables know of, with names, MACs and vendors. IPv4 networks get an address map as well.*
 
 </div>
 

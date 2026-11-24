@@ -78,7 +78,8 @@ def in_use(conn, name):
                        (_count(conn, 'SELECT COUNT(*) FROM nodes WHERE bind = 1'), 'BIND node')) or None
     if name == 'dhcp':
         return _things((_count(conn, 'SELECT COUNT(*) FROM nodes WHERE dhcp = 1'), ('node with Kea', 'nodes with Kea')),
-                       (_count(conn, 'SELECT COUNT(*) FROM dhcp4_subnets'), 'DHCP subnet')) or None
+                       (_count(conn, 'SELECT COUNT(*) FROM dhcp4_subnets'), 'DHCP subnet'),
+                       (_count(conn, 'SELECT COUNT(*) FROM dhcp6_subnets'), 'DHCPv6 subnet')) or None
     if name == 'ntp':
         return _things((_count(conn, 'SELECT COUNT(*) FROM nodes WHERE ntp = 1'), ('node with chrony', 'nodes with chrony'))) or None
     return None     # IPAM only reads what's there

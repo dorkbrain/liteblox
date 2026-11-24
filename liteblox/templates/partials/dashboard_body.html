@@ -64,7 +64,7 @@
             <td>{% for m in r.modules %}<span class="pill"{% if m == 'IPAM' %} title="IPAM sweeps and checks {{ r.sweeps|join(', ') }} from here"{% endif %}>{{ m }}</span>{{ ' ' if not loop.last }}{% else %}<span class="muted small">agent only</span>{% endfor %}</td>
             <td>{{ node_pill(n) }}</td>
             {% if on.dns %}<td>{% if not n.bind %}<span class="muted">–</span>{% elif n.role %}<span class="pill {{ 'ready' if n.role == 'primary' }}" title="{{ r.zones }} zone{{ '' if r.zones == 1 else 's' }}">{{ n.role }}</span>{% elif n.managed %}<span class="muted small">none yet</span>{% else %}<span class="muted small">not taken over</span>{% endif %}</td>{% endif %}
-            {% if on.dhcp %}<td>{% if r.dhcp %}{% set label, colour, tip = r.dhcp %}<span class="pill {{ colour }}" title="{{ tip }}">{{ label }}</span>{% else %}<span class="muted">–</span>{% endif %}</td>{% endif %}
+            {% if on.dhcp %}<td>{% if r.dhcp %}{% set label, colour, tip = r.dhcp %}<span class="pill {{ colour }}" title="{{ tip }}">{{ label }}</span>{% else %}<span class="muted">–</span>{% endif %}{% if r.ra %} <span class="pill warn" title="this node sends router advertisements on {{ r.ra|join(', ') }} (radvd)">RA on</span>{% endif %}</td>{% endif %}
             <td>{% if r.ntp %}<span class="dot {{ 'ok' if r.ntp.synced else 'warn' }}" aria-hidden="true"></span>{% if r.ntp.offset is number %}<span title="chrony's offset from its source">{{ r.ntp.offset|offset }}</span>{% else %}{{ 'synced' if r.ntp.synced else 'no source' }}{% endif %}
               {%- elif r.skew is number %}<span class="dot {{ 'error' if (r.skew|abs) >= 120 else 'warn' if (r.skew|abs) >= 30 else 'ok' }}" aria-hidden="true"></span><span title="its clock minus LiteBlox's">{{ '%+.0f'|format(r.skew) }} s</span>
               {%- else %}<span class="muted">–</span>{% endif %}</td>
@@ -83,7 +83,7 @@
       <h2>DHCP pools <a class="more" href="/dhcp/leases">Leases</a></h2>
       <div class="pools">{% for p in o.pools %}{% set s = p.subnet %}
         <div class="pool">
-          <div class="pool-head"><a href="/dhcp/subnets/{{ s.id }}"><code>{{ s.prefix }}</code></a>
+          <div class="pool-head"><a href="{{ p.link or '/dhcp/subnets/' ~ s.id }}"><code>{{ s.prefix }}</code></a>
             <span class="num">{% if not p.served %}<span class="pill warn">not served</span>{% elif not p.size %}no pool{% elif p.in_pool is none %}no figures yet{% else %}{{ p.in_pool|int }} / {{ p.size }}{% endif %}</span></div>
           {% if p.size %}{{ meter(p.pct, (p.in_pool|int ~ ' of ' ~ p.size ~ ' addresses in the pools') if p.in_pool is not none else '') }}{% endif %}
           <div class="pool-foot muted small">

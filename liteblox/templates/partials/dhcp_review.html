@@ -8,7 +8,7 @@
   {% for p in r.problems %}<p class="error">{{ p }}</p>{% endfor %}
   {% for n in r.notes or [] %}<p class="notice">{{ n }}</p>{% endfor %}
   {% if r.diff %}{{ diff(r.diff) }}
-    {% if not r.problems %}<p class="muted small">✓ Kea on {{ r.node.name }} accepts it (<code>kea-dhcp4 -t</code>).</p>{% endif %}
+    {% if not r.problems %}<p class="muted small">✓ Kea on {{ r.node.name }} accepts it (<code>kea-dhcp4 -t</code>{% if 'kea-dhcp6.conf' in r.diff %}, <code>kea-dhcp6 -t</code>{% endif %}).</p>{% endif %}
   {% elif not r.problems %}<p class="muted small">No change on {{ r.node.name }}.</p>{% endif %}
   {% else %}<p class="muted">No node runs Kea yet: set DHCP up on a node first (its page → DHCP).</p>
   {% endfor %}

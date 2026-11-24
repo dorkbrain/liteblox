@@ -27,6 +27,7 @@ PAGES = [
     ('dynamic', 'Dynamic zones and TSIG keys'),
     ('server-settings', 'Server settings and ACLs'),
     ('dhcp', 'DHCP (Kea)'),
+    ('ipv6', 'IPv6'),
     ('ntp', 'Time (NTP)'),
     ('ipam', 'IPAM (addresses)'),
     ('tools', 'Tools (subnet calculators)'),

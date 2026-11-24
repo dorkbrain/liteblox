@@ -235,5 +235,26 @@ def for_node(conn, node, zones=None, layout=DEBIAN, options=None, top_extra=None
         keys=global_keys(conn),
         zones=decls,
         top_extra=node['top_extra'] or '',
-        distro_includes=json.loads(node['distro_includes'] or '[]'),
+        distro_includes=distro_includes(node),
     )
+
+
+def distro_includes(node):
+    """The distro's include files kept at takeover that the node still has. An OS upgrade can drop one (Debian
+    13's and Ubuntu 26.04's bind9 have no named.conf.default-zones: BIND 9.20 builds those zones in, and the stock
+    named.conf includes named.conf.root-hints instead), so a missing default-zones gives way to root-hints when
+    that's there. Until the agent reports what it has (distro_present NULL), the list as kept."""
+    kept = json.loads(node['distro_includes'] or '[]')
+    present = node['distro_present'] if 'distro_present' in node.keys() else None
+    if present is None:
+        return kept
+    present = set(json.loads(present))
+    out = []
+    for path in kept:
+        if path in present:
+            out.append(path)
+        elif path.endswith('/named.conf.default-zones'):
+            hints = path[:-len('default-zones')] + 'root-hints'
+            if hints in present:
+                out.append(hints)
+    return list(dict.fromkeys(out))

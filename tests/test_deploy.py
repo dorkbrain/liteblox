@@ -394,3 +394,44 @@ def test_the_github_release_is_made_with_gh(tmp_path, monkeypatch):
     assert create[-2:] == [str(tmp_path / 'a.tgz'), str(tmp_path / 'a.tgz.sha256.txt')]
     assert notes.startswith('- a change') and _release.INSTALL_URL in notes
     _release.compare('GitHub release', files(tmp_path), assets)
+
+
+# ── --bump-to ──────────────────────────────────────────────────────────────────
+
+def test_bump_to_only_moves_forward():
+    assert _common.bump_to('4.8.0', '6.0.0') == '6.0.0'
+    assert _common.bump_to('4.8.0', '4.8.1') == '4.8.1'
+    assert _common.bump_to('4.8.0', '4.10.0') == '4.10.0'                 # compared as numbers, not text
+    for bad, message in (('4.8.0', 'not later'), ('4.7.9', 'not later'), ('6.0', 'not a version'),
+                         ('v6.0.0', 'not a version'), ('', 'not a version')):
+        with pytest.raises(ValueError, match=message):
+            _common.bump_to('4.8.0', bad)
+
+
+def test_bump_to_on_the_command_line(tmp_path, monkeypatch, capsys):
+    import _site
+    import deploy
+    monkeypatch.chdir(tmp_path)                 # main() changes directory: put it back afterwards
+    monkeypatch.setattr(_common, 'ROOT', tmp_path)
+    monkeypatch.setattr(_common, 'seed_files', lambda: None)
+    monkeypatch.setattr(_common, 'read_project', lambda: 'liteblox')
+    monkeypatch.setattr(_common, 'registries', lambda: [])
+    monkeypatch.setattr(_common, 'read_version', lambda: '4.8.0')
+    written = []
+    monkeypatch.setattr(_common, 'prompt_changelog', lambda: 'IPv6')
+    monkeypatch.setattr(_common, 'write_version', written.append)
+    monkeypatch.setattr(_common, 'update_changelog', lambda v, msg: written.append((v, msg)))
+    monkeypatch.setattr(_site, 'publish', lambda: True)
+    monkeypatch.setattr(_publish, 'site_destination', lambda: None)
+    monkeypatch.setattr(sys, 'argv', ['deploy.py', '--bump-to', '4.7.0', '--site'])
+    assert deploy.main() == 1 and 'only moves forward' in capsys.readouterr().out and written == []
+    monkeypatch.setattr(sys, 'argv', ['deploy.py', '--bump-to', '6.0.0', '--release'])
+    with pytest.raises(SystemExit):
+        deploy.main()
+    monkeypatch.setattr(sys, 'argv', ['deploy.py', '--bump-to', '6.0.0', '--bump-major', '--site'])
+    with pytest.raises(SystemExit):
+        deploy.main()
+    monkeypatch.setattr(sys, 'argv', ['deploy.py', '--bump-to', '6.0.0', '--site'])
+    assert deploy.main() == 0
+    assert 'Bumping to 6.0.0: 4.8.0 → 6.0.0' in capsys.readouterr().out
+    assert written == ['6.0.0', ('6.0.0', 'IPv6')]

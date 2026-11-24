@@ -376,3 +376,32 @@ def test_api_time(conn, client, timed):
     assert got['nodes'][0] == {'node': 'ns1', 'serves': True, 'networks': ['198.51.100.0/24'], 'keeps_serving': True,
                                'state': {'synced': True, 'reference': '192.0.2.1', 'stratum': 3, 'offset': 0.0}}
     assert client.get('/api/v1/nodes/ns1', headers=h).json()['time']['reference'] == '192.0.2.1'
+
+
+# ── over IPv6 (6.0) ────────────────────────────────────────────────────────────
+
+def test_serving_an_ipv6_network(admin, conn, timed, monkeypatch):
+    monkeypatch.setenv('LITEBLOX_DEV_NTP_SERVE_ONLY', '198.51.100.0/24')
+    t = csrf_from(admin.get('/settings/time').text)
+    form = serve_form(t, serve_1='1', allow_1='198.51.100.0/24\nfd00:1:2:100::/64')
+    r = admin.post('/settings/time', data=form)
+    assert r.status_code == 422 and 'fd00:1:2:100::/64 is outside LITEBLOX_DEV_NTP_SERVE_ONLY' in r.text
+    monkeypatch.setenv('LITEBLOX_DEV_NTP_SERVE_ONLY', '198.51.100.0/24,fd00:1:2:100::/64')
+    review = admin.post('/settings/time/preview', headers={'X-CSRF-Token': t}, data=form).text
+    # the fake node has no address in the /64 yet
+    assert '+allow fd00:1:2:100::/64' in review and 'ns1 has no address in fd00:1:2:100::/64' in review
+    r = admin.post('/settings/time', data=form, follow_redirects=False)
+    assert jobs.get(conn, int(r.headers['location'].rsplit('/', 1)[1]))['status'] == 'ok'
+    text = timed[1].chrony_files['chrony.conf']
+    assert 'allow 198.51.100.0/24\nallow fd00:1:2:100::/64\n' in text
+    agent_mod.validate_chrony(text)
+    assert json.loads(nodes.get_node(conn, 1)['ntp_allow']) == ['198.51.100.0/24', 'fd00:1:2:100::/64']
+
+
+def test_nodes_networks_include_ipv6():
+    from liteblox.nodes.service import own_addresses, own_networks
+    status = {'interfaces': [
+        {'name': 'ens18', 'addresses': ['fe80::1/64', '2001:db8::5/64', '192.168.1.213/24']},
+        {'name': 'ens19', 'addresses': ['fd00:1:2:100::213/64', '192.168.0.213/24', '::1/128']}]}
+    assert own_networks(status) == ['192.168.1.0/24', '192.168.0.0/24', '2001:db8::/64', 'fd00:1:2:100::/64']
+    assert own_addresses(status) == ['192.168.1.213', '192.168.0.213', '2001:db8::5', 'fd00:1:2:100::213']

@@ -62,9 +62,11 @@ A node set up for time sync can answer other machines' time requests too: workst
 
 On **Settings → Time**, under **Serving time**, for each node:
 
-- **Serves time**, **to networks**: the networks it answers, one per line (`192.168.0.0/24`). Name them; serving every address isn't allowed. The review notes a network the node has no address in, since nobody there could reach it.
+- **Serves time**, **to networks**: the networks it answers, one per line (`192.168.0.0/24`, or an IPv6 prefix like `fd00:1:2:100::/64`). Name them; serving every address isn't allowed. The review notes a network the node has no address in, since nobody there could reach it.
 - **Keep serving when the sources are unreachable**: chrony goes on answering from its own clock (as stratum 10) instead of going quiet. With two serving nodes they agree among themselves (chrony's *orphan* mode), so clients don't see two different times.
 
 The same **Review** and **Apply** as for the sources. Then open **UDP 123** on the node for those networks ([firewall](/help/node-prep#7-firewall)).
 
 **Handing it out by DHCP:** on a DHCP subnet's page, the **NTP servers** field suggests the serving nodes' addresses in that subnet. Saving the subnet with them sends them to clients as option 42 (`ntp-servers`). Most systems use it: `systemd-timesyncd` and NetworkManager do, and Windows takes it when it's set to sync with NTP.
+
+**Over IPv6:** a node serves time over IPv6 to the IPv6 prefixes listed for it, from its static address in each. A [DHCPv6 subnet](/help/ipv6#dhcpv6-subnets)'s **NTP servers** field suggests those addresses the same way, sent as option 31 (`sntp-servers`).

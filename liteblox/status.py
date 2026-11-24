@@ -43,6 +43,9 @@ def _node_problems(conn, settings, n, now):
         add('error', 'node', f"{name} doesn't answer" + (f': {detail}' if detail else ''))
     elif n['last_seen_at'] and now - _when(n['last_seen_at']) > SEEN_WITHIN:
         add('warn', 'node', f"{name} hasn't been checked since {timefmt.local(n['last_seen_at'])} (is the health check running?)")
+    if 'checkconf_ok' in n.keys() and n['checkconf_ok'] == 0 and n['status'] != 'error':
+        add('error', 'dns', f"{name}: named-checkconf fails on its BIND config, so named won't start again "
+                            '(after an OS upgrade? the node\'s page shows the files)')
     if n['pending']:
         add('warn', 'dns', f"{name} missed a role change while unreachable; its "
                     f"{'demotion' if n['pending'] == 'demote' else 'update'} runs when it answers")
@@ -55,19 +58,35 @@ def _node_problems(conn, settings, n, now):
     elif bind_apply.stale(conn, n):
         add('info', 'dns', f"{name}'s BIND config is behind; the health check writes it again")
     if n['dhcp']:
-        state = n['dhcp_ha_state']
-        if state and state != 'hot-standby':
-            add('error' if state == 'terminated' else 'warn', 'dhcp',
-                f'{name}: DHCP failover is {state}' + (f' ({HA_STATES[state]})' if state in HA_STATES else ''), '/dhcp')
-        sockets = json.loads(n['dhcp_sockets']) if n['dhcp_sockets'] and n['status'] != 'error' else None
-        if sockets:
-            why = '; '.join(sockets['errors'])
-            if sockets['status'] == 'retrying':
-                add('warn', 'dhcp', f"{name}: Kea can't listen for DHCP yet and keeps trying ({why})", f'{page}#dhcp')
-            else:
-                add('error', 'dhcp', f"{name}: Kea isn't serving DHCP ({why})" + (
-                    ('; Rewrite DHCP config makes it try again' if n['dhcp_drift'] else
-                     '; LiteBlox reloads it once its interfaces are up') if sockets['status'] == 'failed' else ''), f'{page}#dhcp')
+        keys = n.keys()
+        for label, state_col, sockets_col, daemon in (('DHCP', 'dhcp_ha_state', 'dhcp_sockets', 'DHCP'),
+                                                      ('DHCPv6', 'dhcp6_ha_state', 'dhcp6_sockets', 'DHCPv6')):
+            if state_col not in keys:
+                continue
+            state = n[state_col]
+            if state and state != 'hot-standby':
+                add('error' if state == 'terminated' else 'warn', 'dhcp',
+                    f'{name}: {label} failover is {state}' + (f' ({HA_STATES[state]})' if state in HA_STATES else ''),
+                    '/dhcp')
+            sockets = json.loads(n[sockets_col]) if n[sockets_col] and n['status'] != 'error' else None
+            if sockets:
+                why = '; '.join(sockets['errors'])
+                if sockets['status'] == 'retrying':
+                    add('warn', 'dhcp', f"{name}: Kea can't listen for {daemon} yet and keeps trying ({why})",
+                        f'{page}#dhcp')
+                else:
+                    add('error', 'dhcp', f"{name}: Kea isn't serving {daemon} ({why})" + (
+                        ('; Rewrite DHCP config makes it try again' if n['dhcp_drift'] else
+                         '; LiteBlox reloads it once its interfaces are up') if sockets['status'] == 'failed' else ''),
+                        f'{page}#dhcp')
+        ra = json.loads(n['radvd_state']) if 'radvd_state' in keys and n['radvd_state'] and n['status'] != 'error' \
+            else None
+        if ra and not ra.get('in_place'):
+            add('error', 'dhcp', f"{name}: radvd's config isn't in place (is liteblox-radvd.path running?)",
+                f'{page}#dhcp')
+        elif ra and ra.get('interfaces') and not ra.get('active'):
+            add('error', 'dhcp', f"{name}: radvd isn't running, so no router advertisements go out on "
+                f"{', '.join(ra['interfaces'])}", f'{page}#dhcp')
         if n['dhcp_drift']:
             add('warn', 'dhcp', f"{name}'s Kea config was changed outside LiteBlox", f'{page}#dhcp')
         elif dhcp_apply.stale(conn, n):

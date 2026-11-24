@@ -14,6 +14,7 @@ from .api import ipam as api_ipam
 from .api import routes as api_routes
 from .backups import routes as backup_routes
 from .dhcp import routes as dhcp_routes
+from .dhcp import routes6 as dhcp6_routes
 from .dns import routes as zone_routes
 from .ipam import routes as ipam_routes
 from .auth import LoginRequired, verify_csrf
@@ -132,6 +133,7 @@ def create_app(settings=None):
     app.add_exception_handler(DynamicError, _dynamic_error)
     app.mount('/static', StaticFiles(directory=PACKAGE_DIR / 'static'), name='static')
     for router in (routes.router, node_routes.router, backup_routes.router, zone_routes.router, dhcp_routes.router,
+                   dhcp6_routes.router,
                    help.router, accounts.router, acls.router, keys.router, ntp_routes.router, ipam_routes.router,
                    tools.router, modules.router, https_routes.router, api_routes.docs_router):
         app.include_router(router, include_in_schema=False)

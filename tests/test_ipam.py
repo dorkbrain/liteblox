@@ -61,7 +61,8 @@ def test_any_depth_and_deleting_moves_them_up(conn):
 
 @pytest.mark.parametrize('prefix, message', [
     ('192.168.1.0', 'like 192.168.0.0/24'),
-    ('fd00::/64', 'not an IPv4 network'),
+    ('fe80::/64', 'link-local'),
+    ('fd00::/127', 'too small'),
     ('192.168.1.0/31', 'too small'),
 ])
 def test_networks_refused(conn, prefix, message):
@@ -283,7 +284,7 @@ def test_a_containers_map(conn):
     assert cells[0]['child'] is None and cells[0]['level'] == 0 and cells[0]['title'].endswith('not assigned')
     assert cells[1]['child'].name == 'LAN' and cells[1]['level'] == 4
     assert cells[2]['share'] == 0.5 and cells[2]['level'] == 2
-    assert view.container_counts(home) == {'assigned': 384, 'free': 65536 - 384}
+    assert view.container_counts(home) == {'assigned': 384, 'free': 65536 - 384, 'unit': 'addresses'}
     small = model.get(conn, add(conn, '10.0.0.0/24'))
     add(conn, '10.0.0.0/26')
     small = model.get(conn, small.id)

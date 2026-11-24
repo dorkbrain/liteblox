@@ -65,6 +65,7 @@ def world(conn, settings, monkeypatch):
 
     class Live:
         leases = [kea_lease('192.0.2.120'), kea_lease('192.0.2.130', mac='aa:bb:cc:dd:ee:99', hostname='', state=2)]
+        leases6 = []
         errors = []
         text = DYN
         axfr_calls = 0
@@ -78,7 +79,9 @@ def world(conn, settings, monkeypatch):
     monkeypatch.setattr(search.dynamic, 'axfr', axfr)
     monkeypatch.setattr(search.dynamic, 'primary_host', lambda conn, row: '192.0.2.53')
     node = {'id': 1, 'name': 'ns1'}
-    monkeypatch.setattr(search.lease_mod, 'serving_leases', lambda s, c: ([(node, x) for x in live.leases], live.errors))
+    monkeypatch.setattr(search.lease_mod, 'serving_leases',
+                        lambda s, c, family=4: ([(node, x) for x in (live.leases6 if family == 6 else live.leases)],
+                                                live.errors))
     monkeypatch.setattr(search.lease_mod, 'serving', lambda c: [node])
     return live
 
@@ -97,7 +100,8 @@ def names(group):
     ('192.0.2.5', 'ip', ''), ('192.0.2.0/24', 'network', ''), ('192.0.2.7/24', 'network', ''),
     ('BC:24:11:6C:51:D8', 'mac', 'bc24116c51d8'), ('bc-24-11', 'mac', 'bc2411'), ('bc24.116c.51d8', 'mac', 'bc24116c51d8'),
     ('bc24116c51d8', 'mac', 'bc24116c51d8'), ('bc:24:1', 'mac', 'bc241'), ('0:1:2', 'mac', '00012'),
-    ('cafe', 'text', ''), ('pc1.lab.example.', 'text', ''), ('192.0.2.', 'text', ''), ('2001:db8::1', 'text', ''),
+    ('cafe', 'text', ''), ('pc1.lab.example.', 'text', ''), ('192.0.2.', 'text', ''), ('2001:db8::1', 'ip', ''),
+    ('2001:db8::/32', 'network', ''), ('[fd00::5]', 'ip', ''), ('00:01:00:01:aa:bb', 'mac', '00010001aabb'),
 ])
 def test_parse(q, kind, mac):
     query = search.parse(q)

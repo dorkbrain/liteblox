@@ -172,6 +172,15 @@ def record_status(conn, node_id, status=None, error=None, extra=None):
         'addresses': json.dumps(own_addresses(status)), **(extra or {}),
     }
     kea, chrony = status.get('kea') or {}, status.get('time') or {}
+    ra = status.get('ra')
+    if ra is not None:      # agents from 6.0 on
+        fields.setdefault('radvd', int(bool(ra.get('ready'))))
+        fields['radvd_state'] = json.dumps({k: ra.get(k) for k in ('active', 'interfaces', 'in_place')}) \
+            if ra.get('ready') else None
+    if 'distro_includes' in status and status.get('bind'):   # agents from 6.0 on (bindconf.model.distro_includes)
+        fields['distro_present'] = json.dumps(sorted(status['distro_includes']))
+    if status.get('bind') and status.get('taken_over') and 'checkconf_ok' in status:
+        fields['checkconf_ok'] = int(bool(status['checkconf_ok']))
     if kea.get('installed') and kea.get('version'):
         fields['kea_version'] = kea['version']      # which spelling its config needs (dhcp.model.KeaLayout)
     if chrony.get('installed') and chrony.get('version'):
@@ -194,11 +203,15 @@ def other_liteblox(conn, node_id, status):
     kea = status.get('kea') or {}
     if kea.get('liteblox') and kea.get('subnets') and not conn.execute('SELECT 1 FROM dhcp4_subnets').fetchone():
         return True
+    if kea.get('liteblox') and kea.get('subnets6') and not conn.execute('SELECT 1 FROM dhcp6_subnets').fetchone():
+        return True
     return bool((status.get('time') or {}).get('managed') and not node['ntp'])
 
 
 def own_addresses(status):
-    """The node's own IPv4 addresses, from its status: ['192.168.0.213', ...] (next free skips them)."""
+    """The node's own addresses, from its status, IPv4 then IPv6 (no link-local): ['192.168.0.213', 'fd00::213', ...]
+    (next free skips them; a DHCPv6 subnet's DNS suggestion uses them)."""
+    from ..addrs import is_host_scope
     import ipaddress
     out = []
     for i in (status or {}).get('interfaces') or []:
@@ -207,24 +220,26 @@ def own_addresses(status):
                 a = ipaddress.ip_interface(cidr)
             except ValueError:
                 continue
-            if a.version == 4 and not a.is_loopback and str(a.ip) not in out:
+            if is_host_scope(a.ip) and str(a.ip) not in out:
                 out.append(str(a.ip))
-    return out
+    return sorted(out, key=lambda a: ':' in a)      # IPv4 first, each in interface order
 
 
 def own_networks(status):
-    """The IPv4 networks a node's interfaces are on, from its status: ['192.168.0.0/24', ...]."""
+    """The networks a node's interfaces are on, from its status, IPv4 then IPv6 (no link-local):
+    ['192.168.0.0/24', 'fd00:1:2:100::/64', ...]."""
+    from ..addrs import is_host_scope
     import ipaddress
     out = []
     for i in (status or {}).get('interfaces') or []:
         for cidr in i.get('addresses') or []:
             try:
-                net = ipaddress.ip_interface(cidr).network
+                a = ipaddress.ip_interface(cidr)
             except ValueError:
                 continue
-            if net.version == 4 and not net.is_loopback and str(net) not in out:
-                out.append(str(net))
-    return out
+            if is_host_scope(a.ip) and str(a.network) not in out:
+                out.append(str(a.network))
+    return sorted(out, key=lambda n: ':' in n)
 
 
 def agent_client(settings, node, timeout=10.0):
@@ -390,7 +405,7 @@ def start_bootstrap(settings, node_id, creds, options, username, background=True
                                    __version__, log)
                 record_status(conn, node_id, status, extra={
                     'cert_fingerprint': node['cert_fingerprint'], 'cert_not_after': node['cert_not_after'],
-                    **node.get('dhcp_setup', {}), **node.get('ntp_setup', {})})
+                    **node.get('dhcp_setup', {}), **node.get('ntp_setup', {}), **node.get('radvd_setup', {})})
                 db.audit(conn, username, 'node_bootstrap', node['name'])
             except Exception as e:
                 record_status(conn, node_id, error=f'bootstrap failed: {e}')

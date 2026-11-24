@@ -2,26 +2,27 @@
 
 LiteBlox runs **ISC Kea** as the DHCP server on its nodes, alongside BIND. A node can run both: DNS for everyone, and DHCP on the network interfaces you pick.
 
-LiteBlox serves DHCPv4 subnets from one node, or from two nodes as a [failover pair](#a-failover-pair), with reservations, a leases view and DNS registration.
+LiteBlox serves DHCPv4 and DHCPv6 subnets from one node, or from two nodes as a [failover pair](#a-failover-pair), with reservations, a leases view and DNS registration. This page covers DHCPv4; [IPv6](/help/ipv6) covers what's different for DHCPv6 (delegated prefixes, DUIDs, router advertisements).
 
 ## What LiteBlox runs
 
 | Piece | What it does |
 |---|---|
 | `kea-dhcp4` | the DHCPv4 server; its leases are kept in a file on the node (`/var/lib/kea/kea-leases4.csv`) |
-| `kea-dhcp-ddns` (D2) | registers clients' names in your dynamic zones, sending its updates to the DNS primary ([details](#registering-clients-in-dns)) |
-| `liteblox-kea4-ctrl` / `liteblox-kea-ddns-ctrl` | two small systemd socket proxies that let the agent send commands to Kea (see below) |
+| `kea-dhcp6` | the DHCPv6 server (`kea-leases6.csv`); it runs with nothing to serve until there's an [IPv6 subnet](/help/ipv6#dhcpv6-subnets) |
+| `kea-dhcp-ddns` (D2) | registers clients' names in your dynamic zones, sending its updates to the DNS primary ([details](#registering-clients-in-dns)); one for both families |
+| `liteblox-kea4-ctrl` / `liteblox-kea6-ctrl` / `liteblox-kea-ddns-ctrl` | small systemd socket proxies that let the agent send commands to Kea (see below) |
 
-There's no `kea-ctrl-agent` and no database server. LiteBlox writes `/etc/kea/kea-dhcp4.conf` and `/etc/kea/kea-dhcp-ddns.conf` itself, the same way it writes BIND's configuration.
+There's no `kea-ctrl-agent` and no database server. LiteBlox writes `/etc/kea/kea-dhcp4.conf`, `kea-dhcp6.conf` and `kea-dhcp-ddns.conf` itself, the same way it writes BIND's configuration.
 
 ## Setting up DHCP on a node
 
 On the node's page, the **DHCP (Kea)** card has **Set up DHCP**. It opens the **Repair / upgrade agent** form with **Set up Kea DHCP** ticked; the CLI equivalent is `liteblox node bootstrap NAME --dhcp`. Over SSH, setup:
 
-1. masks Kea's services, then installs `kea-dhcp4-server kea-dhcp-ddns-server`, so Debian's sample configuration never runs
+1. masks Kea's services, then installs `kea-dhcp4-server kea-dhcp6-server kea-dhcp-ddns-server`, so Debian's sample configuration never runs
 2. moves the package's own config files to `/etc/kea/pre-liteblox/<time>/`
-3. writes LiteBlox's configuration (no interfaces, no subnets), checks it with `kea-dhcp4 -t`, and starts both services
-4. adds the `liteblox-agent` user to the `_kea` group, makes `/etc/kea` group-writable (setgid `_kea`, so every file there stays readable for Kea), and installs the two socket proxies
+3. writes LiteBlox's configuration (no interfaces, no subnets), checks it with `kea-dhcp4 -t` and `kea-dhcp6 -t`, and starts the services
+4. adds the `liteblox-agent` user to the `_kea` group, makes `/etc/kea` group-writable (setgid `_kea`, so every file there stays readable for Kea), and installs the socket proxies
 
 Running setup again checks all this and keeps the configuration LiteBlox wrote. **Repair / upgrade agent** without the box ticked keeps the agent's access to Kea on a node that already has it.
 
@@ -130,7 +131,7 @@ Clients notice nothing beyond their next renewal going to the other server.
 
 **Setting it up:**
 1. Set DHCP up on both nodes (each node's page → **Set up DHCP**). The standby needs an interface with an address on each network the primary serves. LiteBlox matches them **by network**, so their names may differ (a Raspberry Pi's VLAN interface `eth0.100` beside a VM's `ens19`, say): the review says which of the standby's interfaces stands in for which of the primary's, and so does **Servers** afterwards.
-2. On the DHCP tab, **Failover pair**: pick the primary and the standby, and each one's **link address**, which is where it listens for its partner. An address on the DHCP network is a good choice. Open TCP **8001** (or the port you pick) between the two addresses.
+2. On the DHCP tab, **Failover pair**: pick the primary and the standby, and each one's **link address**, which is where it listens for its partner. An address on the DHCP network is a good choice. Open TCP **8001** (or the port you pick) between the two addresses, and **8002** too once there's an IPv6 subnet (DHCPv6's failover has [its own port](/help/ipv6#the-failover-pair)).
 3. **Review**, then **Pair them**. The standby changes first, then the primary. LiteBlox waits until both report **hot-standby**; if they don't find each other within 90 seconds, both are rolled back.
 
 **The link is TLS both ways.** LiteBlox's own CA issues each node a certificate for its link address. Each server accepts only its partner, so leases (MACs and names) never cross the network in clear.
@@ -220,7 +221,8 @@ A node whose configuration the change leaves as it is (a subnet that isn't serve
 | Line | Meaning |
 |---|---|
 | **Kea** | the installed version |
-| **kea-dhcp4**, **DDNS (D2)** | *running* with its process id, uptime and when it last loaded its config, or *not answering* with the error |
+| **kea-dhcp4**, **kea-dhcp6**, **DDNS (D2)** | *running* with its process id, uptime and when it last loaded its config, or *not answering* with the error |
+| **radvd** | on a node set up for [router advertisements](/help/ipv6#router-advertisements-from-liteblox): *sending on* its interfaces, or *off* |
 | **Serving** | the interfaces Kea answers DHCP on, and the subnets on each |
 | **Interfaces** | the node's network interfaces and addresses. The one LiteBlox reaches the node through is marked *management*. |
 

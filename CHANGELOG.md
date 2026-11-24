@@ -1,5 +1,23 @@
 # Changelog
 
+## 6.0.0 — 2026-11-23
+
+- IPv6: DHCPv6 subnets with address pools, delegated prefixes, reservations by DUID or MAC, DNS registration (AAAA + ip6.arpa PTR) and the failover pair (port 8002)
+- IPv6: a name a client registers over both DHCP and DHCPv6 holds its A and its AAAA (Kea 2.5 and later)
+- IPv6: optional router advertisements from the DHCP nodes, per subnet (radvd, router lifetime 0 so never a default route; SLAAC optional), off by default
+- IPv6: IPAM networks list the addresses LiteBlox knows of there (DNS, DHCPv6, IPAM, neighbour discovery), with ICMPv6 checks and Add DNS
+- IPv6: Search (addresses, networks, DUIDs), the API (/api/v1/dhcp6), lbcli and the CSV exports
+- IPv6: nodes serve time to IPv6 networks, and DHCPv6 subnets hand those servers out (SNTP)
+- Stale DHCP names cover IPv6 (AAAA, DHCPv6 leases and reservations), and reclaiming also removes the PTR records DHCP left pointing at a name without that address (Kea before 3.3.1 leaves one when one family of a dual-stack name goes)
+- A node whose OS upgrade drops a BIND file LiteBlox's named.conf included (Debian 13, Ubuntu 26.04) gets a named.conf without it by itself
+- Needs attention says when named-checkconf fails on a node
+- Kea package updates no longer take away LiteBlox's write access to /etc/kea (after one Repair)
+- Ubuntu 26.04 nodes (Kea 3.0, chrony 4.8)
+- Settings: the IPAM and Modules tabs are as wide as the other tabs
+- The version skips 5.x to match IPv6; 4.x was the last IPv4-only line
+- After updating, Repair each node once: it adds kea-dhcp6 (idle until you add an IPv6 subnet) and new service units. The database is updated on start
+
+
 ## 4.8.0 — 2026-11-23
 
 - DHCP failover pairs no longer need the same interface names on both nodes: the standby's interfaces are matched to the primary's by network (ens19 on one node, eth0.100 on the other, say); the review shows which interface stands for which

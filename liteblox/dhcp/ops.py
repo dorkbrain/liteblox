@@ -4,8 +4,8 @@ from dataclasses import replace
 
 from ..nodes import service as nodes
 from ..nodes.client import AgentError
-from . import apply, leases, store, validate
-from .model import ha_pair, interfaces_of, subnets
+from . import apply, leases, store, validate, validate6
+from .model import ha_pair, has_dhcp6, interfaces_of, reservations6, subnets, subnets6
 
 
 class Busy(RuntimeError):
@@ -132,3 +132,70 @@ def start_reservations(settings, conn, add=(), delete=(), username=None, reason=
         for r in add:
             store.save_reservation(c, r)
     return _start(settings, conn, reason, username, change)
+
+
+# ── DHCPv6 ─────────────────────────────────────────────────────────────────────
+
+def lease6_warnings(settings, conn, r):
+    """Another client holding the reserved address right now."""
+    out = []
+    if not r.ip_address:
+        return out
+    for n in leases.serving(conn):
+        if not has_dhcp6(n):
+            continue
+        try:
+            with nodes.agent_client(settings, n, timeout=10.0) as c:
+                answer = c.dhcp_command('dhcp6', 'lease6-get', {'ip-address': r.ip_address})
+        except AgentError:
+            continue
+        lease = answer.get('arguments') or {}
+        if answer.get('result') == 0 and lease.get('duid') and not leases._matches(r, leases._lease6(lease, 0)):
+            out.append(f"{lease['duid']} ({lease.get('hostname') or 'no name'}) has a lease on {r.ip_address} now: it "
+                       'keeps it until it expires or you delete it')
+    return out
+
+
+def reservation6_change(settings, conn, subnet, r, reservation_id):
+    """(errors, warnings, every v6 subnet as it would be after the change) for reservation r in subnet."""
+    elsewhere = [x for x in reservations6(conn) if x.subnet_id != subnet.id]
+    errors, warnings = validate6.check_reservation6(r, subnet, dhcp_interfaces(settings, conn), elsewhere)
+    if not errors:
+        warnings += lease6_warnings(settings, conn, r)
+    changed = replace(subnet, reservations=[x for x in subnet.reservations if x.id != reservation_id] + [r])
+    after = [changed if x.id == subnet.id else x for x in subnets6(conn)]
+    return errors, warnings, after
+
+
+def _what6(r):
+    return ' + '.join(x for x in (r.ip_address, r.prefix) if x) or f'name {r.hostname}'
+
+
+def _who6(r):
+    return r.duid or r.hw_address
+
+
+def start_reservation6(settings, conn, r, reservation_id, username, via=''):
+    return _start(settings, conn, f"{'change' if reservation_id else 'add'} IPv6 reservation {_what6(r)} for "
+                                  f'{_who6(r)}{via}', username, lambda c: store.save_reservation6(c, r))
+
+
+def start_reservation6_delete(settings, conn, r, username, via=''):
+    return _start(settings, conn, f'delete IPv6 reservation {_what6(r)} for {_who6(r)}{via}', username,
+                  lambda c: store.delete_reservation6(c, r.id))
+
+
+def delete_lease6(settings, conn, node, ip, kind='address'):
+    """Delete a DHCPv6 lease (its DNS names go too), and the partner's copy. Returns the partner's name, or None."""
+    leases.delete6(settings, node, ip, kind)
+    partner = ha_pair(conn).partner_of(node['id'])
+    if not partner:
+        return None
+    partner = nodes.get_node(conn, partner)
+    if not has_dhcp6(partner):
+        return None
+    try:
+        leases.delete6(settings, partner, ip, kind, update_ddns=False)
+    except leases.LeaseError:
+        pass
+    return partner['name']

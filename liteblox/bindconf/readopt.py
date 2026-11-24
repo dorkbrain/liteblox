@@ -30,7 +30,8 @@ from .importconf import ImportPlan, _options, inline
 from .model import DEBIAN, ROLES, UPDATE_KEY, XFR_KEY, Acl, NodeConfig, TsigKey, for_node, node_address
 from .render import HEADER, STATS_CHANNEL, file_hashes, own_top, render
 
-KEA_ROLES = ('kea-dhcp4.conf', 'kea-dhcp-ddns.conf')
+KEA_ROLES = ('kea-dhcp4.conf', 'kea-dhcp6.conf', 'kea-dhcp-ddns.conf', 'radvd.conf')
+RADVD_PREFIX = re.compile(r'prefix\s+(\S+)\s*\{[^}]*?AdvAutonomous\s+(on|off)\s*;')
 EXTRA_MARK = '\n\n\t// extra statements\n'
 OWN_GRANT = f'grant {UPDATE_KEY} zonesub ANY'
 
@@ -95,7 +96,7 @@ def not_fresh(conn):
     """Why this LiteBlox can't take a re-adopt (it only rebuilds into an empty one)."""
     out = []
     for table, what in (('zones', 'zones'), ('acls', 'ACLs'), ('tsig_keys', 'TSIG keys'),
-                        ('dhcp4_subnets', 'DHCP subnets')):
+                        ('dhcp4_subnets', 'DHCP subnets'), ('dhcp6_subnets', 'DHCPv6 subnets')):
         if conn.execute(f'SELECT 1 FROM {table}').fetchone():
             out.append(f'LiteBlox has {what} already')
     if conn.execute("SELECT 1 FROM ntp_settings WHERE sources != '[]'").fetchone():
@@ -439,10 +440,10 @@ def _rebuild_zone(plan, name, decls, primary, planned, parsed):
 
 # ── Kea, read back ─────────────────────────────────────────────────────────────
 
-def _split_options(items, known_only=False):
+def _split_options(items, known_only=False, family=4):
     """option-data → ({form field: value}, [the rest as Kea takes them]) (render.option_data, inverted)."""
-    from ..dhcp.render import OPTION_NAMES
-    names = list(OPTION_NAMES.items())
+    from ..dhcp.render import OPTION_NAMES, OPTION_NAMES6
+    names = list((OPTION_NAMES6 if family == 6 else OPTION_NAMES).items())
     fields, extra, pos = {}, [], 0
     for item in items or []:
         match = next((j for j in range(pos, len(names)) if names[j][1] == item.get('name')), None)
@@ -460,7 +461,11 @@ def _split_options(items, known_only=False):
 
 LIFETIME_KEYS = {'valid-lifetime': 'valid_lifetime', 'renew-timer': 'renew_timer', 'rebind-timer': 'rebind_timer'}
 SUBNET_KEYS = {'id', 'subnet', 'interface', 'pools', 'option-data', 'user-context', 'reservations', *LIFETIME_KEYS}
-DDNS_KEYS = {'ddns-send-updates', 'ddns-qualifying-suffix', 'ddns-update-on-renew', 'ddns-override-client-update'}
+DDNS_KEYS = {'ddns-send-updates', 'ddns-qualifying-suffix', 'ddns-update-on-renew', 'ddns-override-client-update',
+             'ddns-conflict-resolution-mode'}
+LIFETIME_KEYS6 = {'preferred-lifetime': 'preferred_lifetime', **LIFETIME_KEYS}
+SUBNET6_KEYS = {'id', 'subnet', 'interface', 'pools', 'pd-pools', 'option-data', 'user-context', 'reservations',
+                *LIFETIME_KEYS6}
 
 
 def _rebuild_ntp(plan, by_id, parsed):
@@ -504,11 +509,12 @@ def _d2_servers(read):
 
 
 def _rebuild_dhcp(plan, by_id, parsed, primary):
-    from ..dhcp.model import Dhcp4Settings, Reservation, Subnet
+    from ..dhcp.model import Dhcp4Settings, Dhcp6Settings, Reservation, Subnet
     kea_reads = [r for r in plan.reads if r.kea and r.node['id'] in plan.nodes]
     if not kea_reads:
         return
     settings, per_node, served_by, pair = None, {}, {}, None
+    settings6, per_node6, port6 = None, {}, None
     zones = {z['name'] for z in plan.zones if z['kind'] == 'primary'}
     bind_addrs = set().union(*(_addresses(by_id[i]) for i in parsed)) if parsed else set()
     for r in kea_reads:
@@ -520,7 +526,9 @@ def _rebuild_dhcp(plan, by_id, parsed, primary):
             plan.blockers.append(f"{r.node['name']}: its Kea config doesn't parse ({e})")
             continue
         served_by[i] = d4.get('interfaces-config', {}).get('interfaces', [])
-        plan.nodes[i].update({'dhcp': 1, 'kea_hooks_dir': (r.status.get('kea') or {}).get('hooks_dir'),
+        plan.nodes[i].update({'dhcp': 1, 'dhcp6': 1 if (r.status.get('kea') or {}).get('dhcp6') else 0,
+                              'radvd': 1 if (r.status.get('ra') or {}).get('ready') else 0,
+                              'kea_hooks_dir': (r.status.get('kea') or {}).get('hooks_dir'),
                               'kea_version': (r.status.get('kea') or {}).get('version'),
                               'dhcp_interfaces': json.dumps(d4.get('interfaces-config', {}).get('interfaces', [])),
                               'dhcp_files': json.dumps({k: v for k, v in ((r.status.get('kea') or {}).get('files')
@@ -542,6 +550,26 @@ def _rebuild_dhcp(plan, by_id, parsed, primary):
             sub = _subnet(plan, r, s, forward, zones, Subnet, Reservation, reverse if external else None)
             if sub is not None:
                 per_node.setdefault(i, {})[sub.id] = sub
+        try:
+            d6 = json.loads((r.kea or {}).get('kea-dhcp6.conf') or '{}').get('Dhcp6')
+        except ValueError as e:
+            plan.blockers.append(f"{r.node['name']}: its kea-dhcp6.conf doesn't parse ({e})")
+            d6 = None
+        if d6:
+            options6, extra6 = _split_options(d6.get('option-data'), family=6)
+            if settings6 is None:
+                settings6 = Dhcp6Settings(**{v: d6.get(k) for k, v in LIFETIME_KEYS6.items()}, options=options6,
+                                          extra_options=extra6)
+            for s in d6.get('subnet6', []):
+                sub = _subnet6(plan, s, forward, zones, reverse if external else None)
+                if sub is not None:
+                    per_node6.setdefault(i, {})[sub.id] = sub
+            for hook in d6.get('hooks-libraries', []):
+                ha = ((hook.get('parameters') or {}).get('high-availability') or [None])[0]
+                for peer in (ha or {}).get('peers', []):
+                    m = re.fullmatch(r'https://[0-9.]+:(\d+)/', peer.get('url') or '')
+                    if m:
+                        port6 = int(m.group(1))
         for hook in d4.get('hooks-libraries', []):
             ha = ((hook.get('parameters') or {}).get('high-availability') or [None])[0]
             if not ha:
@@ -555,9 +583,22 @@ def _rebuild_dhcp(plan, by_id, parsed, primary):
             if found and pair and found != pair:
                 plan.blockers.append('the two failover nodes describe the pair differently')
             pair = pair or found
+    if pair and port6:
+        pair['port6'] = port6
     subnets = _merge_subnets(plan, per_node, served_by, pair)
+    # DHCPv6's subnets carry the same interface names; the pair's map comes from DHCPv4's (a copy keeps it)
+    subnets6 = _merge_subnets(plan, per_node6, served_by, dict(pair) if pair else None)
+    # router advertisements: a subnet whose prefix a node's radvd.conf announces sends them (SLAAC from its A flag)
+    announced = {}
+    for r in kea_reads:
+        for prefix, autonomous in RADVD_PREFIX.findall((r.kea or {}).get('radvd.conf') or ''):
+            announced[prefix] = announced.get(prefix, False) or autonomous == 'on'
+    for sub in subnets6.values():
+        if sub.prefix in announced:
+            sub.ra, sub.ra_slaac, sub.ra_since = True, announced[sub.prefix], _now()
     plan.dhcp = {'settings': vars(settings) if settings else {}, 'subnets': sorted(subnets.values(), key=lambda s: s.id),
-                 'pair': pair}
+                 'pair': pair, 'settings6': vars(settings6) if settings6 else None,
+                 'subnets6': sorted(subnets6.values(), key=lambda s: s.id)}
     if pair:
         missing = [n for n in (pair['primary_id'], pair['standby_id']) if n not in {r.node['id'] for r in kea_reads}]
         if missing:
@@ -661,6 +702,49 @@ def _subnet(plan, r, s, forward, zones, Subnet, Reservation, external_reverse=No
                   ddns_mode='external' if external_reverse is not None else 'liteblox')
 
 
+def _subnet6(plan, s, forward, zones, external_reverse=None):
+    """A DHCPv6 subnet read back (as _subnet does for DHCPv4)."""
+    from ..dhcp.model import Reservation6, Subnet6
+    options, extra_options = _split_options(s.get('option-data'), family=6)
+    ddns = bool(s.get('ddns-send-updates'))
+    zone, suffix, ddns_reverse = None, '', ''
+    if ddns and external_reverse is not None:
+        suffix = (s.get('ddns-qualifying-suffix') or '').rstrip('.').lower()
+        ddns_reverse = _external_reverse(s['subnet'], external_reverse)
+    elif ddns:
+        wanted = (s.get('ddns-qualifying-suffix') or '').rstrip('.').lower()
+        under = sorted((z for z in forward if wanted == z or wanted.endswith('.' + z)), key=len, reverse=True)
+        if not under or under[0] not in zones:
+            plan.blockers.append(f"DHCPv6 subnet {s.get('subnet')}: it registers names in {wanted}, a zone that isn't "
+                                 'being re-adopted')
+            return None
+        zone, suffix = under[0], '' if wanted == under[0] else wanted
+    reservations = []
+    for x in s.get('reservations') or []:
+        opts, _ = _split_options(x.get('option-data'), known_only=True, family=6)
+        if opts is None or set(x) - {'duid', 'hw-address', 'ip-addresses', 'prefixes', 'hostname', 'option-data'} \
+                or len(x.get('ip-addresses') or []) > 1 or len(x.get('prefixes') or []) > 1:
+            plan.blockers.append(f"DHCPv6 reservation {x.get('duid') or x.get('hw-address')}: it has settings LiteBlox "
+                                 'does not write')
+            continue
+        reservations.append(Reservation6(None, s['id'], x.get('duid', ''), x.get('hw-address', ''),
+                                         (x.get('ip-addresses') or [''])[0], (x.get('prefixes') or [''])[0],
+                                         x.get('hostname', ''), opts))
+    pd = []
+    for p in s.get('pd-pools') or []:
+        if set(p) - {'prefix', 'prefix-len', 'delegated-len'}:
+            plan.blockers.append(f"DHCPv6 subnet {s.get('subnet')}: a delegated-prefix pool has settings LiteBlox does "
+                                 'not write')
+            return None
+        pd.append({'prefix': f"{p['prefix']}/{p['prefix-len']}", 'delegated_len': p['delegated-len']})
+    known = SUBNET6_KEYS | (DDNS_KEYS if ddns else set())
+    return Subnet6(s['id'], s['subnet'], s.get('interface', ''), [p['pool'] for p in s.get('pools', [])], pd, options,
+                   extra_options, {k: v for k, v in s.items() if k not in known},
+                   *(s.get(k) for k in LIFETIME_KEYS6), ddns=ddns, ddns_zone=zone, ddns_suffix=suffix,
+                   ddns_reverse=ddns_reverse, reservations=reservations,
+                   ddns_mode='external' if external_reverse is not None else 'liteblox')
+
+
 # ── recording, and the proof ───────────────────────────────────────────────────
 
 def record(conn, plan, tls):
@@ -720,15 +804,25 @@ def record(conn, plan, tls):
         store.save_subnet(conn, sub)
         for res in sub.reservations:
             store.save_reservation(conn, replace(res, id=None))     # save_reservation sets the id it got
+    if plan.dhcp.get('settings6'):
+        from ..dhcp.model import Dhcp6Settings
+        store.save_settings6(conn, Dhcp6Settings(**plan.dhcp['settings6']))
+    for sub in plan.dhcp.get('subnets6') or []:
+        if sub.ddns and sub.ddns_mode != 'external':
+            sub.ddns_zone_id = conn.execute('SELECT id FROM zones WHERE name = ?', (sub.ddns_zone,)).fetchone()[0]
+        store.save_subnet6(conn, sub)
+        for res in sub.reservations:
+            store.save_reservation6(conn, replace(res, id=None))
     pair = plan.dhcp['pair']
     if pair:
         tls(conn, pair['primary_id'], pair['primary_address'])
         tls(conn, pair['standby_id'], pair['standby_address'])
         with conn:
             conn.execute('UPDATE dhcp4_ha SET primary_node_id = ?, standby_node_id = ?, primary_address = ?, '
-                         'standby_address = ?, port = ?, interface_map = ? WHERE id = 1',
+                         'standby_address = ?, port = ?, interface_map = ?, port6 = ? WHERE id = 1',
                          (pair['primary_id'], pair['standby_id'], pair['primary_address'], pair['standby_address'],
-                          pair['port'], json.dumps(pair.get('interface_map') or {}, sort_keys=True)))
+                          pair['port'], json.dumps(pair.get('interface_map') or {}, sort_keys=True),
+                          pair.get('port6') or 8002))
 
 
 def scratch(conn):
@@ -928,7 +1022,8 @@ def _forget(conn, plan, repo, written):
         for node_id in plan.nodes:
             conn.execute("UPDATE nodes SET managed = 0, role = NULL, dns_address = NULL, options = NULL, "
                          "top_extra = '', distro_includes = NULL, taken_over_at = NULL, config_sha256 = NULL, "
-                         "config_files = NULL, dhcp = 0, dhcp_interfaces = '[]', dhcp_files = NULL, kea_tls = NULL, "
+                         "config_files = NULL, dhcp = 0, dhcp6 = 0, dhcp_interfaces = '[]', dhcp_files = NULL, "
+                         "kea_tls = NULL, "
                          "ntp = 0, ntp_serve = 0, ntp_allow = '[]', ntp_local = NULL, ntp_files = NULL, "
                          'other_liteblox = 1 WHERE id = ?', (node_id,))
     for path in written:
@@ -1062,6 +1157,10 @@ def summary(plan):
         for sub in plan.dhcp['subnets']:
             d.append(f'subnet {sub.prefix} (id {sub.id}) on {sub.interface}: {len(sub.pools)} pool(s), '
                      f'{len(sub.reservations)} reservation(s)' + (f', DNS names in {sub.qualifying_suffix}' if sub.ddns else ''))
+        for sub in plan.dhcp.get('subnets6') or []:
+            d.append(f'IPv6 subnet {sub.prefix} (id {sub.id}) on {sub.interface}: {len(sub.pools)} pool(s), '
+                     f'{len(sub.pd_pools)} delegated-prefix pool(s), {len(sub.reservations)} reservation(s)'
+                     + (f', DNS names in {sub.qualifying_suffix}' if sub.ddns else ''))
         pair = plan.dhcp['pair']
         if pair:
             d.append(f"failover pair: {plan.name(pair['primary_id'])} serves, {plan.name(pair['standby_id'])} stands by "

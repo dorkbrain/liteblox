@@ -107,6 +107,15 @@ def bump_version(version_str, bump_type='patch'):
     return '.'.join(str(x) for x in parts)
 
 
+def bump_to(version_str, target):
+    """target (X.Y.Z) when it's later than version_str: a jump such as 4.8.0 → 6.0.0. Raises ValueError otherwise."""
+    if not re.fullmatch(r'\d+\.\d+\.\d+', target or ''):
+        raise ValueError(f'{target!r} is not a version (X.Y.Z)')
+    if parse_version(target) <= parse_version(version_str):
+        raise ValueError(f'{target} is not later than {version_str}: --bump-to only moves forward')
+    return target
+
+
 def write_version(new_version):
     VERSION_FILE.write_text(new_version + '\n')
     print(f"✓ Updated VERSION to {new_version}")

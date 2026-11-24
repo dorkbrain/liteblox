@@ -2,7 +2,9 @@
 
 import json
 
-from .model import Reservation, Subnet
+from .model import Reservation, Reservation6, Subnet, Subnet6
+
+TABLES6 = {'dhcp6_settings': 'settings6', 'dhcp6_subnets': 'subnets6', 'dhcp6_reservations': 'reservations6'}
 
 
 def snapshot(conn):
@@ -11,18 +13,20 @@ def snapshot(conn):
             'subnets': [dict(r) for r in conn.execute('SELECT * FROM dhcp4_subnets')],
             'reservations': [dict(r) for r in conn.execute('SELECT * FROM dhcp4_reservations')],
             'ha': [dict(r) for r in conn.execute('SELECT * FROM dhcp4_ha')],
+            **{key: [dict(r) for r in conn.execute(f'SELECT * FROM {table}')] for table, key in TABLES6.items()},
             'tls': [(r['id'], r['kea_tls']) for r in conn.execute('SELECT id, kea_tls FROM nodes')],
             'interfaces': [(r['id'], r['dhcp_interfaces']) for r in conn.execute('SELECT id, dhcp_interfaces FROM nodes')]}
 
 
 def restore(conn, snap):
     tables = {'dhcp4_settings': 'settings', 'dhcp4_subnets': 'subnets', 'dhcp4_reservations': 'reservations',
-              'dhcp4_ha': 'ha'}
+              'dhcp4_ha': 'ha', **TABLES6}
     with conn:
         conn.execute('DELETE FROM dhcp4_reservations')
+        conn.execute('DELETE FROM dhcp6_reservations')
         for table, key in tables.items():
             conn.execute(f'DELETE FROM {table}')
-            for row in snap[key]:
+            for row in snap.get(key, ()):
                 cols = list(row)
                 conn.execute(f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
                              [row[c] for c in cols])
@@ -32,11 +36,15 @@ def restore(conn, snap):
             conn.execute('UPDATE nodes SET kea_tls = ? WHERE id = ?', (value, node_id))
 
 
-def next_subnet_id(conn):
+def next_subnet_id(conn, table='dhcp4_subnets'):
     """The subnet-id a new subnet gets (ids are never reused, so Kea never mixes an old subnet's leases in)."""
-    row = conn.execute("SELECT seq FROM sqlite_sequence WHERE name = 'dhcp4_subnets'").fetchone()
-    top = conn.execute('SELECT MAX(id) FROM dhcp4_subnets').fetchone()[0]
+    row = conn.execute('SELECT seq FROM sqlite_sequence WHERE name = ?', (table,)).fetchone()
+    top = conn.execute(f'SELECT MAX(id) FROM {table}').fetchone()[0]
     return max(row[0] if row else 0, top or 0) + 1
+
+
+def next_subnet6_id(conn):
+    return next_subnet_id(conn, 'dhcp6_subnets')
 
 
 def _subnet_values(s):
@@ -71,6 +79,75 @@ def save_settings(conn, s):
                      (s.valid_lifetime, s.renew_timer, s.rebind_timer, json.dumps(s.options, sort_keys=True),
                       json.dumps(s.extra_options), int(s.authoritative), s.ddns_key_id, s.ddns_mode, s.ddns_server,
                       s.ddns_port, json.dumps(s.ddns_external_key, sort_keys=True) if s.ddns_external_key else None))
+
+
+def _subnet6_values(s):
+    return (s.prefix, s.interface, '\n'.join(s.pools), json.dumps(s.pd_pools, sort_keys=True),
+            json.dumps(s.options, sort_keys=True), json.dumps(s.extra_options), json.dumps(s.extra, sort_keys=True),
+            s.preferred_lifetime, s.valid_lifetime, s.renew_timer, s.rebind_timer, s.comment, int(s.ddns),
+            s.ddns_zone_id if s.ddns else None, s.ddns_suffix if s.ddns else '', s.ddns_reverse if s.ddns else '',
+            int(s.ra), int(s.ra and s.ra_slaac), s.ra_since if s.ra else None)
+
+
+SUBNET6_COLUMNS = ('prefix', 'interface', 'pools', 'pd_pools', 'options', 'extra_options', 'extra',
+                   'preferred_lifetime', 'valid_lifetime', 'renew_timer', 'rebind_timer', 'comment', 'ddns',
+                   'ddns_zone_id', 'ddns_suffix', 'ddns_reverse', 'ra', 'ra_slaac', 'ra_since')
+
+
+def save_subnet6(conn, s):
+    with conn:
+        if conn.execute('SELECT 1 FROM dhcp6_subnets WHERE id = ?', (s.id,)).fetchone():
+            conn.execute(f"UPDATE dhcp6_subnets SET {', '.join(c + ' = ?' for c in SUBNET6_COLUMNS)} WHERE id = ?",
+                         (*_subnet6_values(s), s.id))
+        else:
+            conn.execute(f"INSERT INTO dhcp6_subnets (id, {', '.join(SUBNET6_COLUMNS)}) "
+                         f"VALUES ({', '.join('?' * (len(SUBNET6_COLUMNS) + 1))})", (s.id, *_subnet6_values(s)))
+
+
+def delete_subnet6(conn, subnet_id):
+    with conn:
+        conn.execute('DELETE FROM dhcp6_subnets WHERE id = ?', (subnet_id,))
+
+
+def get_subnet6(conn, subnet_id):
+    row = conn.execute('SELECT s.*, z.name AS ddns_zone FROM dhcp6_subnets s LEFT JOIN zones z ON z.id = s.ddns_zone_id '
+                       'WHERE s.id = ?', (subnet_id,)).fetchone()
+    if row is None:
+        return None
+    s = Subnet6.from_row(row)
+    from .model import ddns_mode
+    s.ddns_mode = ddns_mode(conn)
+    return s
+
+
+def save_settings6(conn, s):
+    with conn:
+        conn.execute('UPDATE dhcp6_settings SET preferred_lifetime = ?, valid_lifetime = ?, renew_timer = ?, '
+                     'rebind_timer = ?, options = ?, extra_options = ? WHERE id = 1',
+                     (s.preferred_lifetime, s.valid_lifetime, s.renew_timer, s.rebind_timer,
+                      json.dumps(s.options, sort_keys=True), json.dumps(s.extra_options)))
+
+
+def save_reservation6(conn, r):
+    with conn:
+        values = (r.subnet_id, r.duid, r.hw_address, r.ip_address, r.prefix, r.hostname,
+                  json.dumps(r.options, sort_keys=True), r.comment)
+        if r.id and conn.execute('SELECT 1 FROM dhcp6_reservations WHERE id = ?', (r.id,)).fetchone():
+            conn.execute('UPDATE dhcp6_reservations SET subnet_id = ?, duid = ?, hw_address = ?, ip_address = ?, '
+                         'prefix = ?, hostname = ?, options = ?, comment = ? WHERE id = ?', (*values, r.id))
+        else:
+            r.id = conn.execute('INSERT INTO dhcp6_reservations (subnet_id, duid, hw_address, ip_address, prefix, '
+                                'hostname, options, comment) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', values).lastrowid
+
+
+def delete_reservation6(conn, reservation_id):
+    with conn:
+        conn.execute('DELETE FROM dhcp6_reservations WHERE id = ?', (reservation_id,))
+
+
+def get_reservation6(conn, reservation_id):
+    row = conn.execute('SELECT * FROM dhcp6_reservations WHERE id = ?', (reservation_id,)).fetchone()
+    return Reservation6.from_row(row) if row else None
 
 
 def set_interfaces(conn, node_id, names):
@@ -128,9 +205,10 @@ def _differing(mapping):
 
 def rename_subnet_interfaces(conn, mapping):
     """Give every subnet the name `mapping` has for its interface (one pass, so a swap of two names works)."""
-    for row in conn.execute('SELECT id, interface FROM dhcp4_subnets').fetchall():
-        if row['interface'] in mapping:
-            conn.execute('UPDATE dhcp4_subnets SET interface = ? WHERE id = ?', (mapping[row['interface']], row['id']))
+    for table in ('dhcp4_subnets', 'dhcp6_subnets'):
+        for row in conn.execute(f'SELECT id, interface FROM {table}').fetchall():
+            if row['interface'] in mapping:
+                conn.execute(f'UPDATE {table} SET interface = ? WHERE id = ?', (mapping[row['interface']], row['id']))
 
 
 def set_interface_map(conn, mapping):
@@ -143,7 +221,8 @@ def leaving_pair(old, primary_id, standby_id):
     return [n for n in (old.primary_id, old.standby_id) if old.active and n not in (primary_id, standby_id)]
 
 
-def set_pair(conn, pki, primary_id, standby_id, primary_address, standby_address, port, interface_map=None):
+def set_pair(conn, pki, primary_id, standby_id, primary_address, standby_address, port, interface_map=None,
+             port6=None):
     """Pair the two nodes: the standby serves the primary's interfaces, under its own names (interface_map,
     {primary's name: standby's}); each gets its peer certificate. Subnets always carry the primary's names, so when
     the old standby becomes the primary they're renamed through the old map."""
@@ -164,6 +243,8 @@ def set_pair(conn, pki, primary_id, standby_id, primary_address, standby_address
                      'standby_address = ?, port = ?, interface_map = ? WHERE id = 1',
                      (primary_id, standby_id, primary_address, standby_address, port,
                       json.dumps(mapping, sort_keys=True)))
+        if port6 is not None:
+            conn.execute('UPDATE dhcp4_ha SET port6 = ? WHERE id = 1', (port6,))
         conn.execute('UPDATE nodes SET dhcp_interfaces = ? WHERE id = ?',
                      (json.dumps(sorted(mapping.get(n, n) for n in served)), standby_id))
 

@@ -106,7 +106,10 @@ Debian doesn't filter anything by default. If you use a firewall, the node needs
 | 22 TCP | the LiteBlox host (and you) | setup over SSH; only needed during setup and upgrades |
 | 8530 TCP | the LiteBlox host | the LiteBlox agent (mutual TLS) |
 | 67 UDP | DHCP clients | only on a node that serves [DHCP](/help/dhcp) |
+| 547 UDP | DHCPv6 clients | only on a node that serves an [IPv6 subnet](/help/ipv6#dhcpv6-subnets) |
 | 8001 TCP | the other node of a DHCP failover pair | the pair's link (mutual TLS), on the link addresses you pick |
+| 8002 TCP | the other node of the pair | DHCPv6's failover link, once there's an IPv6 subnet |
+| ICMPv6 | the network | IPv6 can't work without neighbour discovery, and IPAM's Check sends echo requests (the example below accepts all ICMP) |
 | 123 UDP | the networks a node serves time to | only on a node that [serves time](/help/ntp#serving-time) |
 
 An nftables example (`/etc/nftables.conf`). Replace the addresses, and keep a console open while you apply it so a mistake can't lock you out:
@@ -161,25 +164,36 @@ So nothing comes as a surprise, setup (from the node's page, **Set up**):
 - creates a `liteblox-agent` system user in the `bind` group and installs the agent in `/usr/local/lib/liteblox-agent/`, its config and certificates in `/etc/liteblox-agent/`, and a `liteblox-agent` systemd service listening on TCP 8530
 - **takes over the BIND configuration** (when ticked, the default) on a server with the stock Debian configuration: `named.conf` then includes only the files LiteBlox writes in `/etc/bind/liteblox/`, and `named.conf.options` and `named.conf.local` move to `/etc/bind/pre-liteblox/<time>/`. LiteBlox checks first that its version is equivalent to the stock one, and rolls back if BIND doesn't answer afterwards. A server with a configuration of its own is left as it is: [take it over](/help/existing-servers) from its page after reviewing the preview.
 
-- **sets up Kea DHCP** only when **Set up Kea DHCP** is ticked: installs `kea-dhcp4-server kea-dhcp-ddns-server`, adds `liteblox-agent` to the `_kea` group, makes `/etc/kea` group-writable, and installs two small socket proxies so the agent can talk to Kea. Kea gets a configuration that serves nothing until you add a subnet. See [DHCP (Kea)](/help/dhcp).
+- **sets up Kea DHCP** only when **Set up Kea DHCP** is ticked: installs `kea-dhcp4-server kea-dhcp6-server kea-dhcp-ddns-server`, adds `liteblox-agent` to the `_kea` group, makes `/etc/kea` group-writable, and installs three small socket proxies so the agent can talk to Kea. Kea gets a configuration that serves nothing until you add a subnet (kea-dhcp6 runs idle until there's an IPv6 subnet). See [DHCP (Kea)](/help/dhcp).
+- **installs radvd** only when **Router advertisements (radvd)** is ticked: the package, stopped and disabled, and a systemd path unit that runs it only while a subnet asks for [router advertisements](/help/ipv6#router-advertisements-from-liteblox).
 
 Running setup again repairs or upgrades the agent and changes nothing that's already in place.
 
 ## Ubuntu Server
 
-Ubuntu Server 24.04 works as a node with everything (BIND, Kea, chrony, IPAM), from its minimal install too. The steps above apply with these differences:
+Ubuntu Server 24.04 and 26.04 work as nodes with everything (BIND, Kea, chrony, IPAM), from their minimal installs too. The steps above apply with these differences:
 
 - **Static IP:** Ubuntu uses netplan. Set the address in `/etc/netplan/` (the installer's file, often `50-cloud-init.yaml`), then `sudo netplan apply`.
-- **Packages:** BIND, Kea and chrony all come from Ubuntu's `main` repository on 24.04, so nothing else needs enabling. On releases before 23.04, Kea is in `universe`. When a package can't be found, setup stops and names it, so you can enable its repository and run setup again.
-- **Versions:** Ubuntu 24.04 has BIND 9.18, Kea 2.4 and chrony 4.5, older than Debian 13's. LiteBlox writes each one's configuration in the form that version reads, and a failover pair can mix them (Kea 2.4 with 2.6).
+- **Packages:** BIND, Kea, chrony and radvd all come from Ubuntu's `main` repository on 24.04, so nothing else needs enabling. On releases before 23.04, Kea is in `universe`. When a package can't be found, setup stops and names it, so you can enable its repository and run setup again.
+- **Versions:** Ubuntu 24.04 has BIND 9.18, Kea 2.4 and chrony 4.5, older than Debian 13's; 26.04 has BIND 9.20, Kea 3.0 and chrony 4.8. LiteBlox writes each one's configuration in the form that version reads, and a failover pair can mix them (Kea 2.4, 2.6 and 3.0).
 - **Ping:** Ubuntu doesn't let ordinary users ping. Setup lets the agent's group do it (`/etc/sysctl.d/60-liteblox-agent-ping.conf`), so IPAM's probes use ICMP there too.
 - **systemd-resolved** keeps its own resolver on 127.0.0.53 and 127.0.0.54. BIND listens beside it without any change.
+
+## Upgrading a node's OS
+
+A node can move to a new release in place (Debian 12 → 13, Ubuntu 24.04 → 26.04, with `do-release-upgrade`). LiteBlox notices the new BIND, Kea and chrony versions by itself and writes each config again in the form the new version reads. Along the way:
+
+- **Keep your version** when the upgrade asks about `named.conf`, `named.conf.local`, `named.conf.options` or Kea's `kea-dhcp4.conf`, `kea-dhcp6.conf`, `kea-dhcp-ddns.conf`: those are LiteBlox's (it's the default answer, and the unattended upgrade takes it). The package's own versions stay beside them as `.dpkg-dist` files; the node's page lists them, and LiteBlox doesn't use them.
+- **A distro file that went away:** the bind9 of Debian 13 and Ubuntu 26.04 has no `named.conf.default-zones` (BIND 9.20 builds those zones in; the stock config includes `named.conf.root-hints` instead). Until LiteBlox rewrites `named.conf`, `named-checkconf` fails, which stops the bind9 package's setup halfway (`dpkg --configure -a` finishes it) and would keep named from starting again. With the 6.0 agent, the health check sees the file is gone and writes `named.conf` without it (with `named.conf.root-hints`, when it's there) within a minute or two; **Needs attention** says when `named-checkconf` fails on a node. Then run `sudo dpkg --configure -a` on the node if the upgrade stopped.
+- **Repair once afterwards** (the node's page → **Repair / upgrade agent**): a Kea package upgrade resets `/etc/kea`'s permissions (and before 6.0, any routine Kea update did), so LiteBlox can't write Kea's config until Repair sets them again; 6.0's Repair also tells dpkg to keep them from then on.
+
+A failover pair keeps serving from the other node while one upgrades; the pair can mix Kea versions afterwards.
 
 ## Nodes without BIND
 
 A node added with **Runs DNS (BIND)** unticked (a DHCP- or Time-only node, or a [scanner](/help/modules#scanner-nodes) for IPAM) skips everything about BIND: no `/etc/bind` snapshot, no BIND install, permissions or takeover, and the agent isn't in the `bind` group. It needs:
 
-- Debian 12/13 or Ubuntu 22.04/24.04 with `python3` 3.9 or newer, systemd and `ip` (setup installs `iproute2` if it's missing)
+- Debian 12/13 or Ubuntu 22.04/24.04/26.04 with `python3` 3.9 or newer, systemd and `ip` (setup installs `iproute2` if it's missing)
 - an account that can use `sudo`, over SSH, for setup (step 6)
 - TCP 8530 open from LiteBlox (step 7); DNS doesn't need to be open
 - a synced clock (step 4), unless LiteBlox sets up Time on it

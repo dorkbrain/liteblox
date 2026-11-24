@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 {% from 'partials/ui.html' import action_bar %}
 {% block title %}Modules · Settings · LiteBlox{% endblock %}
+{% block main_class %}wide{% endblock %}
 {% block content %}
 {% include 'partials/settings_tabs.html' %}
 {% if done %}<p class="notice">{{ done }}</p>{% endif %}

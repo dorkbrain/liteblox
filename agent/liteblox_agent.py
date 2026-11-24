@@ -79,7 +79,8 @@ DEFAULT_CONFIG = {
                         '/etc/bind/rndc.key'],
     'log_dirs': ['/var/log/named', '/var/lib/bind'],
     'bind_group': 'bind',
-    'backup_paths': ['/etc/bind', '/var/lib/bind/liteblox', '/etc/kea', '/var/lib/kea', '/etc/chrony'],
+    'backup_paths': ['/etc/bind', '/var/lib/bind/liteblox', '/etc/kea', '/var/lib/kea', '/etc/chrony',
+                     '/etc/liteblox-radvd'],
     'backup_keep': 10,
     # Kea (DHCP): it only opens config files inside kea_dir, so candidates are checked there too
     'kea_dir': '/etc/kea',
@@ -88,8 +89,10 @@ DEFAULT_CONFIG = {
     'kea_log_dir': '/var/log/kea',
     # Kea's own control sockets (written into its config) and the ones the agent connects to: Kea
     # makes its sockets 0750 _kea, so a systemd-socket-proxyd running as _kea opens them to the agent
-    'kea_sockets': {'dhcp4': '/run/kea/kea4-ctrl-socket', 'd2': '/run/kea/kea-ddns-ctrl-socket'},
-    'kea_access': {'dhcp4': '/run/liteblox-kea/kea4-ctrl-socket', 'd2': '/run/liteblox-kea/kea-ddns-ctrl-socket'},
+    'kea_sockets': {'dhcp4': '/run/kea/kea4-ctrl-socket', 'dhcp6': '/run/kea/kea6-ctrl-socket',
+                    'd2': '/run/kea/kea-ddns-ctrl-socket'},
+    'kea_access': {'dhcp4': '/run/liteblox-kea/kea4-ctrl-socket', 'dhcp6': '/run/liteblox-kea/kea6-ctrl-socket',
+                   'd2': '/run/liteblox-kea/kea-ddns-ctrl-socket'},
     'kea_group': '_kea',
     # chrony (time): its AppArmor profile only lets chronyd read config inside chrony_dir, so candidates are
     # checked there; a systemd path unit restarts chrony when chrony_conf is replaced
@@ -97,6 +100,13 @@ DEFAULT_CONFIG = {
     'chrony_conf': '/etc/chrony/chrony.conf',
     'chrony_unit': 'chrony.service',
     'chrony_restart_wait': 20,
+    # router advertisements (6.0, optional): the agent writes radvd_conf; a systemd path unit (root) copies it to
+    # radvd_live and runs radvd while it names an interface, or stops and disables radvd when it names none
+    'radvd_dir': '/etc/liteblox-radvd',
+    'radvd_conf': '/etc/liteblox-radvd/radvd.conf',
+    'radvd_live': '/etc/radvd.conf',
+    'radvd_unit': 'radvd.service',
+    'radvd_wait': 20,
     # the Dashboard's figures: BIND's statistics channel (LiteBlox writes it into top.conf, localhost only),
     # and the filesystems whose use is reported
     'bind_stats_url': 'http://127.0.0.1:8053/json/v1/server',
@@ -109,11 +119,13 @@ DEFAULT_CONFIG = {
         'named_checkzone': '/usr/bin/named-checkzone',
         'rndc': '/usr/sbin/rndc',
         'kea_dhcp4': '/usr/sbin/kea-dhcp4',
+        'kea_dhcp6': '/usr/sbin/kea-dhcp6',
         'kea_dhcp_ddns': '/usr/sbin/kea-dhcp-ddns',
         'ip': '/usr/sbin/ip',
         'timedatectl': '/usr/bin/timedatectl',
         'chronyd': '/usr/sbin/chronyd',
         'chronyc': '/usr/bin/chronyc',
+        'radvd': '/usr/sbin/radvd',
         'systemctl': '/usr/bin/systemctl',
     },
 }
@@ -442,8 +454,10 @@ CONFIG_VALIDATORS = {
 # ── Kea config (DHCP) ──────────────────────────────────────────────────────────
 
 # role: (top-level key, service)
-KEA_ROLES = {'kea-dhcp4.conf': ('Dhcp4', 'dhcp4'), 'kea-dhcp-ddns.conf': ('DhcpDdns', 'd2')}
-KEA_TOOLS = {'dhcp4': 'kea_dhcp4', 'd2': 'kea_dhcp_ddns'}
+KEA_ROLES = {'kea-dhcp4.conf': ('Dhcp4', 'dhcp4'), 'kea-dhcp6.conf': ('Dhcp6', 'dhcp6'),
+             'kea-dhcp-ddns.conf': ('DhcpDdns', 'd2')}
+KEA_TOOLS = {'dhcp4': 'kea_dhcp4', 'dhcp6': 'kea_dhcp6', 'd2': 'kea_dhcp_ddns'}
+KEA_SUBNETS = {'dhcp4': 'subnet4', 'dhcp6': 'subnet6'}
 # config-reload's error for a subnet on an interface Kea hasn't seen yet (made or renamed after Kea started)
 KEA_NEW_INTERFACE = 'is not present in the system'
 # the failover pair's mutual-TLS files (in kea_dir/tls): role -> the PEM block it must be
@@ -454,6 +468,7 @@ HA_KEYS = frozenset(('this-server-name', 'mode', 'heartbeat-delay', 'max-respons
                      'delayed-updates-limit'))
 HA_URL = re.compile(r'https?://(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})/')
 KEA_HOOKS = ('libdhcp_lease_cmds.so', 'libdhcp_ha.so')
+RADVD_ROLE = 'radvd.conf'        # written with Kea's files when the node sends router advertisements
 # what LiteBlox writes into Dhcp4 now or in later milestones; anything else (config-control,
 # hosts-databases, a config backend...) is refused
 DHCP4_KEYS = frozenset((
@@ -468,12 +483,28 @@ DHCP4_KEYS = frozenset((
     'renew-timer', 'reservations', 'reservations-global', 'reservations-in-subnet', 'reservations-out-of-pool',
     'sanity-checks', 'server-hostname', 'shared-networks', 'store-extended-info', 'subnet4', 't1-percent',
     't2-percent', 'user-context', 'valid-lifetime'))
+# the same for Dhcp6 (6.0): no relay or config-backend keys, no data-directory
+DHCP6_KEYS = frozenset((
+    'cache-max-age', 'cache-threshold', 'calculate-tee-times', 'client-classes', 'comment', 'control-socket',
+    'ddns-conflict-resolution-mode', 'ddns-generated-prefix', 'ddns-override-client-update',
+    'ddns-override-no-update', 'ddns-qualifying-suffix', 'ddns-replace-client-name', 'ddns-send-updates',
+    'ddns-ttl-percent', 'ddns-update-on-renew', 'ddns-use-conflict-resolution', 'decline-probation-period',
+    'dhcp-ddns', 'expired-leases-processing', 'host-reservation-identifiers', 'hooks-libraries',
+    'hostname-char-replacement', 'hostname-char-set', 'interfaces-config', 'lease-database', 'loggers',
+    'mac-sources', 'max-preferred-lifetime', 'max-valid-lifetime', 'min-preferred-lifetime', 'min-valid-lifetime',
+    'multi-threading', 'option-data', 'option-def', 'pd-allocator', 'preferred-lifetime', 'rapid-commit',
+    'rebind-timer', 'renew-timer', 'reservations', 'reservations-global', 'reservations-in-subnet',
+    'reservations-out-of-pool', 'sanity-checks', 'server-id', 'shared-networks', 'store-extended-info', 'subnet6',
+    't1-percent', 't2-percent', 'user-context', 'valid-lifetime'))
+SERVER_ID_KEYS = frozenset(('type', 'identifier', 'time', 'htype', 'enterprise-id', 'persist', 'user-context'))
 D2_KEYS = frozenset(('comment', 'control-socket', 'dns-server-timeout', 'forward-ddns', 'ip-address', 'loggers',
                      'ncr-format', 'ncr-protocol', 'port', 'reverse-ddns', 'tsig-keys', 'user-context'))
 LOOPBACK = ('127.0.0.1', '::1')
 # commands LiteBlox may send through /dhcp/command, per service
 KEA_COMMANDS = {
     'dhcp4': ('status-get', 'config-get', 'version-get', 'lease4-get-page', 'lease4-get', 'lease4-del',
+              'ha-heartbeat', 'ha-maintenance-start', 'ha-maintenance-cancel', 'ha-sync-complete-notify'),
+    'dhcp6': ('status-get', 'config-get', 'version-get', 'lease6-get-page', 'lease6-get', 'lease6-del',
               'ha-heartbeat', 'ha-maintenance-start', 'ha-maintenance-cancel', 'ha-sync-complete-notify'),
     'd2': ('status-get', 'version-get'),
 }
@@ -555,13 +586,17 @@ def validate_kea(role, text, cfg):
     if not isinstance(data, dict) or list(data) != [top] or not isinstance(data[top], dict):
         raise ConfError(f'{role}: must be {{"{top}": {{...}}}} and nothing else')
     body = data[top]
-    allowed = DHCP4_KEYS if service == 'dhcp4' else D2_KEYS
+    allowed = {'dhcp4': DHCP4_KEYS, 'dhcp6': DHCP6_KEYS}.get(service, D2_KEYS)
     extra = sorted(set(body) - allowed)
     if extra:
         raise ConfError(f'{role}: {", ".join(extra)} not allowed')
     _control_socket(body.get('control-socket'), cfg, service, role)
     _loggers(body.get('loggers', []), cfg, role)
-    if service == 'dhcp4':
+    if service == 'dhcp6' and 'server-id' in body:
+        sid = body['server-id']
+        if not isinstance(sid, dict) or set(sid) - SERVER_ID_KEYS:
+            raise ConfError(f'{role}: server-id takes {", ".join(sorted(SERVER_ID_KEYS))}')
+    if service in ('dhcp4', 'dhcp6'):
         db = body.get('lease-database')
         if not isinstance(db, dict) or db.get('type') != 'memfile' or not _under(db.get('name', ''), cfg['kea_lease_dir']):
             raise ConfError(f'{role}: lease-database must be memfile with its file under {cfg["kea_lease_dir"]}')
@@ -670,6 +705,85 @@ def validate_chrony(text):
         raise ConfError('chrony.conf has no server or pool to sync from')
 
 
+RADVD_HEADER = '# Generated by LiteBlox.'
+RADVD_TOKEN = re.compile(r'[{};]|[^\s{};]+')
+IFNAME = re.compile(r'[A-Za-z0-9_.:-]{1,15}')
+# what an interface block may say, and the values it may give (AdvDefaultLifetime 0: never a default route)
+RADVD_FLAGS = {'AdvSendAdvert': ('on',), 'AdvManagedFlag': ('on', 'off'), 'AdvOtherConfigFlag': ('on', 'off'),
+               'AdvDefaultLifetime': ('0',)}
+RADVD_INTERVALS = {'MinRtrAdvInterval': (3, 1350), 'MaxRtrAdvInterval': (4, 1800)}
+RADVD_PREFIX_FLAGS = {'AdvOnLink': ('on',), 'AdvAutonomous': ('on', 'off')}
+
+
+def validate_radvd(text):
+    """radvd.conf as LiteBlox writes it: per interface, the M/O flags, the intervals and /64 prefixes, and router
+    lifetime 0, so a node never offers itself as a default route. Nothing else. Returns the interfaces (none: off)."""
+    lines = text.splitlines()
+    if not lines or not lines[0].startswith(RADVD_HEADER):
+        raise ConfError('radvd.conf must start with the LiteBlox header')
+    tokens = RADVD_TOKEN.findall('\n'.join(line.split('#', 1)[0] for line in lines))
+    tokens.reverse()
+
+    def take(expected=None):
+        if not tokens:
+            raise ConfError('radvd.conf ends too soon' + (f' (expected {expected!r})' if expected else ''))
+        word = tokens.pop()
+        if expected is not None and word != expected:
+            raise ConfError(f'radvd.conf: expected {expected!r}, found {word!r}')
+        return word
+
+    interfaces = []
+    while tokens:
+        take('interface')
+        name = take()
+        if not IFNAME.fullmatch(name) or name in interfaces:
+            raise ConfError(f'radvd.conf: {name!r} is not an interface name (or comes twice)')
+        take('{')
+        seen, prefixes = {}, []
+        while True:
+            word = take()
+            if word == '}':
+                break
+            if word == 'prefix':
+                try:
+                    net = ipaddress.IPv6Network(take())
+                except ValueError as e:
+                    raise ConfError(f'radvd.conf: {name}: {e}')
+                if net.prefixlen != 64 or net.is_link_local or net.is_multicast:
+                    raise ConfError(f'radvd.conf: {name}: {net} must be a /64 that is not link-local')
+                take('{')
+                flags = {}
+                while True:
+                    option = take()
+                    if option == '}':
+                        break
+                    value = take()
+                    if value not in RADVD_PREFIX_FLAGS.get(option, ()):
+                        raise ConfError(f'radvd.conf: {name} {net}: {option} {value} is not allowed')
+                    flags[option] = value
+                    take(';')
+                take(';')
+                prefixes.append(str(net))
+                continue
+            value = take()
+            if word in RADVD_FLAGS:
+                if value not in RADVD_FLAGS[word]:
+                    raise ConfError(f'radvd.conf: {name}: {word} {value} is not allowed')
+            elif word in RADVD_INTERVALS:
+                low, high = RADVD_INTERVALS[word]
+                if not re.fullmatch(r'\d{1,4}', value) or not low <= int(value) <= high:
+                    raise ConfError(f'radvd.conf: {name}: {word} must be {low} to {high}')
+            else:
+                raise ConfError(f'radvd.conf: {name}: {word} is not allowed')
+            seen[word] = value
+            take(';')
+        take(';')
+        if seen.get('AdvSendAdvert') != 'on' or seen.get('AdvDefaultLifetime') != '0' or not prefixes:
+            raise ConfError(f'radvd.conf: {name} needs AdvSendAdvert on, AdvDefaultLifetime 0 and a prefix')
+        interfaces.append(name)
+    return interfaces
+
+
 def chrony_tracking(out):
     """chronyc -c tracking (CSV) → a dict, or None."""
     f = out.strip().split(',')
@@ -749,14 +863,19 @@ PROBE_MAX = 64          # addresses per /probe call: a /24 sweep is four calls
 
 
 def parse_neigh(rows):
-    """`ip -4 -s -j neigh` rows → [{ip, mac, dev, state, used, confirmed, updated, probes}]; entries without a
-    MAC (INCOMPLETE, FAILED) are dropped. used/confirmed/updated: seconds ago. confirmed is when the neighbour
+    """`ip -4|-6 -s -j neigh` rows → [{ip, mac, dev, state, used, confirmed, updated, probes}]; entries without a
+    MAC (INCOMPLETE, FAILED) and IPv6 link-local ones (fe80::, on every link) are dropped. used/confirmed/updated: seconds ago. confirmed is when the neighbour
     last proved it's there (an ARP reply, or traffic from it, a TCP ACK say): the one to trust as "last seen";
     used is only when this node last sent to it. probes: ARP requests sent without an answer since then."""
     out = []
     for r in rows or []:
         mac = (r.get('lladdr') or '').lower()
         if not mac or not r.get('dst'):
+            continue
+        try:
+            if ipaddress.ip_address(r['dst']).is_link_local:
+                continue
+        except ValueError:
             continue
         state = r.get('state') or []
         out.append({'ip': r['dst'], 'mac': mac, 'dev': r.get('dev'),
@@ -775,22 +894,26 @@ def _icmp_checksum(data):
     return ~total & 0xffff
 
 
-def _icmp_socket():
-    # an unprivileged ICMP socket: allowed by net.ipv4.ping_group_range (systemd's default covers every group),
-    # so the agent needs no CAP_NET_RAW; the kernel matches the replies to this socket
-    return socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_ICMP)
+def _icmp_socket(family=socket.AF_INET):
+    # an unprivileged ICMP socket: allowed by net.ipv4.ping_group_range (systemd's default covers every group; it
+    # covers ICMPv6 too), so the agent needs no CAP_NET_RAW; the kernel matches the replies to this socket
+    proto = socket.IPPROTO_ICMPV6 if family == socket.AF_INET6 else socket.IPPROTO_ICMP
+    return socket.socket(family, socket.SOCK_DGRAM, proto)
 
 
-def icmp_probe(addresses, interval=0.1, wait=2.0):
+def icmp_probe(addresses, interval=0.1, wait=2.0, family=socket.AF_INET):
     """Send one echo request to each address, `interval` seconds apart, reading replies as they come, then
     wait up to `wait` seconds more. Returns ({ip: rtt_ms}, method). When ICMP sockets aren't allowed, a UDP
-    datagram to the discard port still makes the kernel ARP for the address (method 'udp': no replies)."""
+    datagram to the discard port still makes the kernel ARP (IPv6: neighbour discovery) for the address (method
+    'udp': no replies). family: AF_INET6 for IPv6 addresses (ICMPv6 echo, whose checksum the kernel fills in)."""
+    v6 = family == socket.AF_INET6
+    request, reply = (b'\x80', b'\x81') if v6 else (b'\x08', b'\0')       # echo request / reply types
     try:
-        sock = _icmp_socket()
+        sock = _icmp_socket(family)
     except OSError:
         sock = None
     if sock is None:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+        with socket.socket(family, socket.SOCK_DGRAM) as udp:
             for a in addresses:
                 try:
                     udp.sendto(b'', (a, 9))
@@ -812,17 +935,19 @@ def icmp_probe(addresses, interval=0.1, wait=2.0):
                 if not ready:
                     return
                 try:
-                    data, (src, _port) = sock.recvfrom(1500)
+                    data, addr = sock.recvfrom(1500)
                 except (BlockingIOError, InterruptedError):
                     continue
                 except OSError:
                     return
-                if data[:1] == b'\0' and src in sent and src not in replied:     # type 0: echo reply
+                src = addr[0]
+                if data[:1] == reply and src in sent and src not in replied:
                     replied[src] = round((time.monotonic() - sent[src]) * 1000, 1)
 
         for seq, a in enumerate(addresses):
-            packet = struct.pack('!BBHHH', 8, 0, 0, 0, seq & 0xffff) + b'liteblox'
-            packet = packet[:2] + struct.pack('!H', _icmp_checksum(packet)) + packet[4:]
+            packet = request + struct.pack('!BHHH', 0, 0, 0, seq & 0xffff) + b'liteblox'
+            if not v6:
+                packet = packet[:2] + struct.pack('!H', _icmp_checksum(packet)) + packet[4:]
             sent[a] = time.monotonic()
             try:
                 sock.sendto(packet, (a, 0))
@@ -1072,12 +1197,13 @@ class Agent:
             'interfaces': self.interfaces(),
             'kea': self.kea_status(),
             'time': self.time_status(),
+            'ra': self.radvd_status(),
         }
         if self.cfg['bind']:
             out.update(self._bind_status())
         else:   # the same keys, empty: LiteBlox reads them from every node
-            out.update(taken_over=False, config_files={}, dpkg_leftovers=[], named_version=None, rndc_ok=False,
-                       rndc_status='', checkconf_ok=False, zones_writable={}, managed_dir_writable=False)
+            out.update(taken_over=False, config_files={}, dpkg_leftovers=[], distro_includes=[], named_version=None,
+                       rndc_ok=False, rndc_status='', checkconf_ok=False, zones_writable={}, managed_dir_writable=False)
         out['clock'] = self.clock()     # last: LiteBlox measures the skew against when the answer arrives
         return out
 
@@ -1174,6 +1300,9 @@ class Agent:
             'taken_over': taken_over,
             'config_files': {r: self._file_sha(p) for r, p in paths.items()},
             'dpkg_leftovers': self.dpkg_leftovers(),
+            # which of the distro's include files exist: an OS upgrade can drop one the generated named.conf
+            # includes (Ubuntu 26.04 has no named.conf.default-zones), and LiteBlox then leaves it out
+            'distro_includes': [f for f in self.cfg['distro_includes'] if os.path.isfile(f)],
             'named_version': named_v if named_code == 0 else None,
             'rndc_ok': rndc_code == 0,
             'rndc_status': rndc_out,
@@ -1205,11 +1334,15 @@ class Agent:
                 for r in rows if r.get('ifname') != 'lo']
 
     def neigh(self, query):
-        """The node's IPv4 neighbour table (`ip -4 -s -j neigh`): who it has talked to, with their MACs."""
-        return {'neighbours': parse_neigh(self._neigh_rows())}
+        """The node's IPv4 neighbour table (`ip -4 -s -j neigh`), or with ?family=6 its IPv6 one (NDP, global and
+        ULA addresses): who it has talked to, with their MACs."""
+        family = (query or {}).get('family', ['4'])[0]
+        if family not in ('4', '6'):
+            raise AgentError(HTTPStatus.BAD_REQUEST, 'family is 4 or 6')
+        return {'neighbours': parse_neigh(self._neigh_rows(int(family)))}
 
-    def _neigh_rows(self):
-        code, out = self.run('ip', '-4', '-s', '-j', 'neigh', timeout=10)
+    def _neigh_rows(self, family=4):
+        code, out = self.run('ip', f'-{family}', '-s', '-j', 'neigh', timeout=10)
         if code != 0:
             raise AgentError(HTTPStatus.INTERNAL_SERVER_ERROR, 'ip neigh failed', output=out)
         try:
@@ -1225,8 +1358,9 @@ class Agent:
                     net = ipaddress.ip_interface(cidr).network
                 except ValueError:
                     continue
-                if net.version == 4 and not net.is_loopback and net.prefixlen < 32:
-                    nets.append(net)
+                if net.is_loopback or net.is_link_local or net.prefixlen >= net.max_prefixlen:
+                    continue
+                nets.append(net)
         return nets
 
     def probe(self, body):
@@ -1235,30 +1369,35 @@ class Agent:
         {method, elapsed, results: {ip: {replied, rtt_ms, state, mac, confirmed}}}."""
         addresses = body.get('addresses') or []
         if not isinstance(addresses, list) or not addresses or len(addresses) > PROBE_MAX:
-            raise AgentError(HTTPStatus.BAD_REQUEST, f'addresses: a list of 1 to {PROBE_MAX} IPv4 addresses')
+            raise AgentError(HTTPStatus.BAD_REQUEST, f'addresses: a list of 1 to {PROBE_MAX} IP addresses')
         nets = self._local_networks()
-        wanted = []
+        wanted = {4: [], 6: []}
         for a in addresses:
             try:
-                ip = ipaddress.IPv4Address(str(a))
+                ip = ipaddress.ip_address(str(a))
             except ValueError:
-                raise AgentError(HTTPStatus.BAD_REQUEST, f'{a} is not an IPv4 address')
+                raise AgentError(HTTPStatus.BAD_REQUEST, f'{a} is not an IP address')
             # only the node's own networks: this isn't a tool for scanning anywhere else
-            if not any(ip in n and ip not in (n.network_address, n.broadcast_address) for n in nets):
+            ends = lambda n: (n.network_address, n.broadcast_address) if n.version == 4 else (n.network_address,)
+            if not any(ip in n and ip not in ends(n) for n in nets):
                 raise AgentError(HTTPStatus.BAD_REQUEST, f'{a} is not on a network this node is directly on')
-            if str(ip) not in wanted:
-                wanted.append(str(ip))
+            if str(ip) not in wanted[ip.version]:
+                wanted[ip.version].append(str(ip))
         try:
             interval = min(max(float(body.get('interval_ms', 100)), 10.0), 300.0) / 1000     # 64 × 0.3 s + 5 s < 30 s
             wait = min(max(float(body.get('wait', 2.0)), 0.5), 5.0)
         except (TypeError, ValueError):
             raise AgentError(HTTPStatus.BAD_REQUEST, 'interval_ms and wait must be numbers')
         started = time.monotonic()
-        replied, method = icmp_probe(wanted, interval, wait)
+        replied, method, seen = {}, None, {}
+        for version, family in ((4, socket.AF_INET), (6, socket.AF_INET6)):
+            if wanted[version]:
+                got, method = icmp_probe(wanted[version], interval, wait, family)
+                replied.update(got)
+                seen.update({n['ip']: n for n in parse_neigh(self._neigh_rows(version))})
         elapsed = time.monotonic() - started
-        seen = {n['ip']: n for n in parse_neigh(self._neigh_rows())}
         results = {}
-        for a in wanted:
+        for a in wanted[4] + wanted[6]:
             n = seen.get(a)
             results[a] = {'replied': a in replied, 'rtt_ms': replied.get(a),
                           'state': n['state'] if n else None, 'mac': n['mac'] if n else None,
@@ -1299,7 +1438,64 @@ class Agent:
         return out
 
     def kea_paths(self):
-        return {role: os.path.join(self.cfg['kea_dir'], role) for role in list(KEA_ROLES) + list(KEA_TLS)}
+        """{role: path} of the files a DHCP change writes: Kea's, and radvd's on a node set up for it."""
+        out = {role: os.path.join(self.cfg['kea_dir'], role) for role in list(KEA_ROLES) + list(KEA_TLS)}
+        if self._radvd_ready():
+            out[RADVD_ROLE] = self.cfg['radvd_conf']
+        return out
+
+    def _dhcp_role(self, path):
+        return next((r for r, p in self.kea_paths().items() if p == path), os.path.relpath(path, self.cfg['kea_dir']))
+
+    # ── radvd (router advertisements, part of a DHCP change) ──
+
+    def _radvd_ready(self):
+        return os.path.isdir(self.cfg['radvd_dir']) and os.path.exists(self.tools.get('radvd') or '')
+
+    def _radvd_active(self):
+        code, out = self.run('systemctl', 'show', self.cfg['radvd_unit'], '-p', 'ActiveState',
+                             '-p', 'ExecMainStartTimestampMonotonic', timeout=10)
+        props = dict(line.split('=', 1) for line in out.splitlines() if '=' in line) if code == 0 else {}
+        return props.get('ActiveState') == 'active', props.get('ExecMainStartTimestampMonotonic')
+
+    def radvd_status(self):
+        """Whether radvd is set up for LiteBlox, running, and on which interfaces it advertises."""
+        if not self._radvd_ready():
+            return {'ready': False, 'installed': os.path.exists(self.tools.get('radvd') or '')}
+        try:
+            interfaces = validate_radvd(read_text(self.cfg['radvd_live']))
+        except (OSError, ConfError):
+            interfaces = None       # not LiteBlox's (yet), or unreadable
+        return {'ready': True, 'installed': True, 'active': self._radvd_active()[0], 'interfaces': interfaces,
+                'in_place': self._file_sha(self.cfg['radvd_live']) == self._file_sha(self.cfg['radvd_conf'])}
+
+    def _radvd_applied(self, text, before):
+        """Wait for the path unit to put radvd.conf in place: radvd (re)started when it names an interface,
+        stopped when it names none. (ok, error)."""
+        on = bool(validate_radvd(text))
+        deadline = time.time() + self.cfg['radvd_wait']
+        while True:
+            try:
+                placed = read_text(self.cfg['radvd_live']) == text
+            except (OSError, ConfError):
+                placed = False
+            active, started = self._radvd_active()
+            if placed and (active and started != before if on else not active):
+                return True, None
+            if time.time() >= deadline:
+                break
+            time.sleep(0.5)
+        if not placed:
+            return False, 'radvd.conf was not put in place (is liteblox-radvd.path enabled? radvd --configtest?)'
+        return False, 'radvd is not running after the change' if on else 'radvd did not stop'
+
+    def _radvd_settle(self, before):
+        """After the previous radvd.conf came back: wait for it to be in place again; an error, or None."""
+        try:
+            ok, error = self._radvd_applied(read_text(self.cfg['radvd_conf']), before)
+        except (OSError, ConfError) as e:
+            return f'cannot read radvd.conf: {e}'
+        return None if ok else error
 
     def kea_status(self):
         """Kea's installed version, each service's status-get (or why not), and the config files' hashes."""
@@ -1308,6 +1504,8 @@ class Agent:
         code, version = self.run('kea_dhcp4', '-v', timeout=10)
         services = {}
         for service, path in self.cfg['kea_access'].items():
+            if service in KEA_TOOLS and not self._kea_has(service):
+                continue        # kea-dhcp6 before the node's 6.0 Repair
             try:
                 answer = kea_command(path, 'status-get', timeout=5)
                 args = answer.get('arguments') or {}
@@ -1323,7 +1521,8 @@ class Agent:
             except AgentError as e:
                 services[service] = {'running': False, 'error': e.message}
         out = {'installed': True, 'version': version.strip() if code == 0 else None, 'services': services,
-               'hooks_dir': self.cfg['kea_hooks_dir'], 'liteblox': False, 'subnets': 0,
+               'dhcp6': self._kea_has('dhcp6'), 'hooks_dir': self.cfg['kea_hooks_dir'], 'liteblox': False,
+               'subnets': 0,
                'files': {role: self._file_sha(path) for role, path in self.kea_paths().items()}}
         # whether a LiteBlox wrote this config, and serves anything with it (a lost LiteBlox's node is re-adopted)
         try:
@@ -1332,6 +1531,12 @@ class Agent:
             out['subnets'] = len(d4.get('subnet4') or [])
         except (OSError, ConfError, ValueError, AttributeError):
             pass
+        if out['dhcp6']:
+            try:
+                d6 = json.loads(read_text(self.kea_paths()['kea-dhcp6.conf'])).get('Dhcp6') or {}
+                out['subnets6'] = len(d6.get('subnet6') or [])
+            except (OSError, ConfError, ValueError, AttributeError):
+                pass
         return out
 
     def config(self, query):
@@ -1601,7 +1806,12 @@ class Agent:
                 raise AgentError(HTTPStatus.BAD_REQUEST, f'cannot retire {path!r}: only config files named.conf '
                                                          'includes now, in its own directory, and unused by the new set')
         declared = {z['name']: z for z in zones}
-        declared_now = {z['name']: os.path.realpath(z['file']) for z in self.zones()[0] if z['file']}
+        try:
+            declared_now = {z['name']: os.path.realpath(z['file']) for z in self.zones()[0] if z['file']}
+        except AgentError:
+            # the live config doesn't pass named-checkconf (an OS upgrade took a file it includes): the new set,
+            # checked above, is what fixes it; only the files of zones leaving dynamic stay behind
+            declared_now = {}
         # a zone leaving dynamic (switched off, or a demoted primary now a secondary) leaves named's file
         # and journal in dyn_dir: they go with the commit (its rollback set keeps them)
         dyn_dir = os.path.realpath(self.cfg['dyn_dir'])
@@ -1842,12 +2052,28 @@ class Agent:
         if not os.path.isdir(self.cfg['kea_dir']) or not os.path.exists(self.tools.get('kea_dhcp4') or ''):
             raise AgentError(HTTPStatus.CONFLICT, 'Kea is not set up on this node')
 
+    def _kea_has(self, service):
+        """Is the service's Kea program installed (kea-dhcp6 comes with 6.0's Repair)?"""
+        return os.path.exists(self.tools.get(KEA_TOOLS[service]) or '')
+
     def _kea_files(self, files):
         if not isinstance(files, dict) or not files:
             raise AgentError(HTTPStatus.BAD_REQUEST, 'files (object of role: text) is required')
         for role, text in files.items():
+            if role == RADVD_ROLE and isinstance(text, str):
+                if not self._radvd_ready():
+                    raise AgentError(HTTPStatus.CONFLICT, 'radvd is not set up on this node (Repair with router '
+                                     'advertisements ticked)')
+                try:
+                    validate_radvd(text)
+                except ConfError as e:
+                    raise AgentError(HTTPStatus.UNPROCESSABLE_ENTITY, str(e))
+                continue
             if (role not in KEA_ROLES and role not in KEA_TLS) or not isinstance(text, str):
                 raise AgentError(HTTPStatus.BAD_REQUEST, f'unknown Kea config file {role!r}')
+            if role in KEA_ROLES and not self._kea_has(KEA_ROLES[role][1]):
+                raise AgentError(HTTPStatus.CONFLICT, f'{role}: {KEA_TOOLS[KEA_ROLES[role][1]].replace("_", "-")} '
+                                 'is not installed on this node (Repair sets it up)')
             try:
                 if role in KEA_TLS:
                     validate_tls(role, text)
@@ -1862,7 +2088,7 @@ class Agent:
         live = self.kea_paths()
         outputs = {}
         for role, path in written.items():
-            if role in KEA_TLS:
+            if role in KEA_TLS or role == RADVD_ROLE:
                 continue
             text = read_text(path)
             for tls_role in KEA_TLS:
@@ -1901,6 +2127,8 @@ class Agent:
         written = {}
         try:
             for role, text in files.items():
+                if role == RADVD_ROLE:
+                    continue        # validated above; only the path unit's radvd --configtest reads it
                 written[role] = os.path.join(self.cfg['kea_dir'], f'{role}.liteblox-check-{secrets.token_hex(4)}')
                 self._ensure_kea_dir(written[role])
                 self._kea_write(written[role], text)
@@ -1928,13 +2156,20 @@ class Agent:
             try:
                 for role, text in files.items():
                     path = live[role] + STAGE_SUFFIX
-                    self._ensure_kea_dir(path)
-                    self._kea_write(path, text)
+                    if role == RADVD_ROLE:
+                        if self._file_sha(live[role]) == sha256(text.encode()):
+                            continue        # unchanged: radvd isn't restarted for nothing
+                        self._write_like(path, text.encode(), like=live[role])
+                    else:
+                        self._ensure_kea_dir(path)
+                        self._kea_write(path, text)
                     staged.append((path, live[role]))
-                outputs = self._kea_test_set({os.path.relpath(lv, self.cfg['kea_dir']): st for st, lv in staged})
+                outputs = self._kea_test_set({self._dhcp_role(lv): st for st, lv in staged})
             except OSError as e:
                 self._discard({'files': staged})
-                raise AgentError(HTTPStatus.FORBIDDEN, f'cannot write the new Kea config: {e}')
+                hint = ('; a Kea package update may have reset the permissions of ' + self.cfg['kea_dir']
+                        + ': Repair the node' if isinstance(e, PermissionError) else '')
+                raise AgentError(HTTPStatus.FORBIDDEN, f'cannot write the new Kea config: {e}{hint}')
             except BaseException:
                 self._discard({'files': staged})
                 raise
@@ -1947,7 +2182,10 @@ class Agent:
     def _kea_reload(self, roles):
         """config-reload each service whose file is in `roles`; [(service, error)] for those that failed."""
         failed = []
-        for service in dict.fromkeys(KEA_ROLES[r][1] if r in KEA_ROLES else 'dhcp4' for r in roles):
+        for service in dict.fromkeys(KEA_ROLES[r][1] if r in KEA_ROLES else 'dhcp4' for r in roles
+                                     if r in KEA_ROLES or r in KEA_TLS):
+            if not self._kea_has(service):
+                continue
             try:
                 answer = kea_command(self.cfg['kea_access'][service], 'config-reload', timeout=30)
                 if answer.get('result') != 0:
@@ -1956,33 +2194,36 @@ class Agent:
                 failed.append((service, e.message))
         return failed
 
-    def _kea_learn_interfaces(self):
+    def _kea_learn_interfaces(self, service='dhcp4'):
         """Kea learns the system's interfaces when it starts, and config-reload checks a subnet's interface against
         that list before it looks again (which it does when it opens its sockets), so an interface made or renamed
         after Kea started (a VLAN, say) fails the reload until Kea restarts. Instead: set the new config once with
         the subnets' interface names left out, which opens the sockets and so re-detects the interfaces, then
         reload the real file. [(service, error)] like _kea_reload."""
-        path = self.kea_paths()['kea-dhcp4.conf']
+        role = next(r for r, (_, s) in KEA_ROLES.items() if s == service)
+        top, key = KEA_ROLES[role][0], KEA_SUBNETS[service]
+        path = self.kea_paths()[role]
         try:
             with open(path) as f:
                 config = json.load(f)
-            dhcp4 = config['Dhcp4']
-            for subnet in dhcp4.get('subnet4') or []:
+            body = config[top]
+            for subnet in body.get(key) or []:
                 subnet.pop('interface', None)
-            for network in dhcp4.get('shared-networks') or []:
+            for network in body.get('shared-networks') or []:
                 network.pop('interface', None)
-                for subnet in network.get('subnet4') or []:
+                for subnet in network.get(key) or []:
                     subnet.pop('interface', None)
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
-            return [('dhcp4', f'cannot read {path} to retry: {e}')]
+            return [(service, f'cannot read {path} to retry: {e}')]
         try:
-            answer = kea_command(self.cfg['kea_access']['dhcp4'], 'config-set', config, timeout=30)
+            answer = kea_command(self.cfg['kea_access'][service], 'config-set', config, timeout=30)
         except AgentError as e:
-            return [('dhcp4', e.message)]
+            return [(service, e.message)]
         if answer.get('result') != 0:
-            return [('dhcp4', answer.get('text') or 'config-set failed')]
-        log.info('Kea did not know an interface yet: loaded the config without subnet interfaces so it looked again')
-        return self._kea_reload(['kea-dhcp4.conf'])
+            return [(service, answer.get('text') or 'config-set failed')]
+        log.info('%s did not know an interface yet: loaded the config without subnet interfaces so it looked again',
+                 service)
+        return self._kea_reload([role])
 
     def commit_dhcp(self, body):
         with self.lock:
@@ -1993,6 +2234,9 @@ class Agent:
                 raise AgentError(HTTPStatus.CONFLICT, 'Kea config changed on the node since it was staged',
                                  changed=changed)
             folder, manifest = self._save_rollback(stage)
+            roles = [self._dhcp_role(lv) for _, lv in stage['files']]
+            radvd = next((read_text(st) for st, lv in stage['files'] if lv == self.cfg['radvd_conf']), None)
+            before = self._radvd_active()[1] if radvd is not None else None
             try:
                 for staged, live in stage['files']:
                     os.replace(staged, live)
@@ -2000,14 +2244,22 @@ class Agent:
                 self._undo(folder, manifest)
                 self._discard(stage)
                 raise AgentError(HTTPStatus.FORBIDDEN, f'cannot replace the Kea config: {e}; nothing changed')
-            roles = [os.path.relpath(lv, self.cfg['kea_dir']) for _, lv in stage['files']]
             failed = self._kea_reload(roles)
-            if any(service == 'dhcp4' and KEA_NEW_INTERFACE in message for service, message in failed):
-                failed = [f for f in failed if f[0] != 'dhcp4'] + self._kea_learn_interfaces()
+            for retry in [service for service, message in failed if service in KEA_SUBNETS
+                          and KEA_NEW_INTERFACE in message]:
+                failed = [f for f in failed if f[0] != retry] + self._kea_learn_interfaces(retry)
+            if not failed and radvd is not None:
+                ok, error = self._radvd_applied(radvd, before)
+                if not ok:
+                    failed.append(('radvd', error))
             if failed:
+                before = self._radvd_active()[1]
                 self._undo(folder, manifest)
                 self._kea_reload(roles)          # back to the previous files
-                raise AgentError(HTTPStatus.INTERNAL_SERVER_ERROR, 'Kea did not take the new config; rolled back',
+                if radvd is not None:
+                    self._radvd_settle(before)
+                raise AgentError(HTTPStatus.INTERNAL_SERVER_ERROR, 'Kea did not take the new config; rolled back'
+                                 if failed[0][0] != 'radvd' else 'radvd did not take the new config; rolled back',
                                  output='; '.join(f'{s}: {m}' for s, m in failed))
         log.info('committed Kea config')
         return {'committed': True, 'files': {r: self._file_sha(p) for r, p in self.kea_paths().items()}}
@@ -2021,10 +2273,16 @@ class Agent:
         """Undo the newest committed Kea config change that hasn't been rolled back yet."""
         with self.lock:
             name, folder, manifest = self._newest_change('_dhcp')
+            radvd = any(e['path'] == self.cfg['radvd_conf'] for e in manifest['entries'])
+            before = self._radvd_active()[1] if radvd else None
             self._restore(manifest)
             manifest['rolled_back'] = True
             self._write_manifest(folder, manifest)
-            failed = self._kea_reload([os.path.relpath(e['path'], self.cfg['kea_dir']) for e in manifest['entries']])
+            failed = self._kea_reload([self._dhcp_role(e['path']) for e in manifest['entries']])
+            if radvd:
+                error = self._radvd_settle(before)
+                if error:
+                    failed.append(('radvd', error))
             if failed:
                 raise AgentError(HTTPStatus.INTERNAL_SERVER_ERROR, 'restored the previous Kea config, but the '
                                  'reload failed', output='; '.join(f'{s}: {m}' for s, m in failed))

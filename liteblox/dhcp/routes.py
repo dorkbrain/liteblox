@@ -22,8 +22,8 @@ from ..templating import templates
 from . import apply, ops, store, validate
 from . import leases as lease_mod
 from .model import (DDNS_MODES, LIFETIMES, Dhcp4Settings, HaPair, Reservation, Subnet, dns_primary,
-                    dynamic_reverse_zones, ha_pair, interfaces_of, serves, settings as load_settings,
-                    subnets as load_subnets)
+                    dynamic_reverse_zones, ha_pair, has_dhcp6, interfaces_of, serves, settings as load_settings,
+                    subnets as load_subnets, subnets6 as load_subnets6)
 from .render import derived_reverse_zones, reverse_zones_for, subnet_reverse_zones
 
 router = APIRouter()
@@ -179,10 +179,21 @@ def suggested_dns(conn, prefix):
         return []
     out = []
     for n in nodes.list_nodes(conn):
+        if not n['managed']:
+            continue
         addr = node_address(n)
-        if addr and n['managed'] and ipaddress.ip_address(addr) in network:
+        if addr and ipaddress.ip_address(addr) in network:
             out.append(addr)
+        elif network.version == 6 and _listens_v6(n):
+            # an IPv6 subnet: the node's own static address in it (BIND listens on IPv6 unless told not to)
+            out += [a for a in json.loads(n['addresses'] or '[]')
+                    if ':' in a and ipaddress.ip_address(a) in network and a not in out][:1]
     return out
+
+
+def _listens_v6(node):
+    from ..bindconf.model import NodeOptions
+    return NodeOptions.from_json(node['options']).listen_on_v6 not in (['none'], [])
 
 
 # ── previews ───────────────────────────────────────────────────────────────────
@@ -264,19 +275,28 @@ def overview(request: Request, user: User = Depends(current_user), conn=Depends(
     pair = ha_pair(conn)
     for n in apply.dhcp_nodes(conn):
         status, error = _status(request, n)
-        ha = (((status or {}).get('kea') or {}).get('services') or {}).get('dhcp4', {}).get('ha')
+        services = ((status or {}).get('kea') or {}).get('services') or {}
+        ha = (services.get('dhcp4') or {}).get('ha')
+        ha6 = (services.get('dhcp6') or {}).get('ha')
+        partner = pair.partner_of(n['id'])
+        for h in (ha, ha6):         # Kea leaves the partner's name out while it can't reach it
+            if h and h.get('remote') is not None and not h['remote'].get('name') and partner:
+                h['remote']['name'] = pair.primary_name if partner == pair.primary_id else pair.standby_name
         addresses = [a.split('/')[0] for i in (status or {}).get('interfaces') or [] for a in i['addresses']
                      if ':' not in a]
         servers.append({'node': n, 'status': status, 'error': error, 'served': interfaces_of(n),
-                        'own': {n['host'], node_address(n)}, 'role': pair.role_of(n['id']), 'ha': ha,
+                        'own': {n['host'], node_address(n)}, 'role': pair.role_of(n['id']), 'ha': ha, 'ha6': ha6,
+                        'dhcp6': has_dhcp6(n),
                         'addresses': addresses,
                         # a standby's own interface name: the primary's it stands in for, where they differ
                         'stands_for': {v: k for k, v in pair.interface_map.items()}
                         if pair.role_of(n['id']) == 'standby' else {}})
     serving = {n['id'] for n in _serving(conn)}
     counts, _ = lease_mod.counts(_settings(request), conn)
+    from .routes6 import overview_rows
     return templates.TemplateResponse(request, 'dhcp.html', {
         'user': user, 'servers': servers, 'subnets': load_subnets(conn), 'serving': serving, 'counts': counts,
+        'subnets6': overview_rows(request, conn),
         'served_names': {i for s in servers for i in s['served']},
         'pair': pair,
         'others_set_up': [n for n in nodes.list_nodes(conn) if nodes.set_up(n) and not n['dhcp']],
@@ -800,8 +820,12 @@ def _pair_change(request, conn, form):
         port = int(form.get('port') or 8001)
     except ValueError:
         port = None
+    try:
+        port6 = int(form.get('port6') or ha_pair(conn).port6)
+    except ValueError:
+        port6 = None
     values = {'primary_address': (form.get('primary_address') or '').strip(),
-              'standby_address': (form.get('standby_address') or '').strip(), 'port': port}
+              'standby_address': (form.get('standby_address') or '').strip(), 'port': port, 'port6': port6}
     live = {}
     for n in (primary, standby):
         if n:
@@ -811,7 +835,7 @@ def _pair_change(request, conn, form):
             live[n['id']] = status.get('interfaces') or []
     served = interfaces_of(primary) if primary else []
     errors = validate.check_pair(primary, standby, values['primary_address'], values['standby_address'], port,
-                                 live, served)
+                                 live, served, port6)
     if not errors:
         values['interface_map'], _ = validate.match_interfaces(primary, standby, live.get(primary['id']),
                                                                live.get(standby['id']), served)
@@ -821,14 +845,14 @@ def _pair_change(request, conn, form):
 def _pair_of(primary, standby, values):
     return HaPair(primary['id'], standby['id'], primary['name'], standby['name'], values['primary_address'],
                   values['standby_address'], values['port'],
-                  {k: v for k, v in (values.get('interface_map') or {}).items() if k != v})
+                  {k: v for k, v in (values.get('interface_map') or {}).items() if k != v}, values.get('port6') or 8002)
 
 
-def _subnets_for_pair(conn, primary_id):
+def _subnets_for_pair(conn, primary_id, family=4):
     """The subnets as they'll be once `primary_id` is the primary: renamed to its interface names when it's the
     current standby (store.set_pair does the same)."""
     from dataclasses import replace
-    old, subnets = ha_pair(conn), load_subnets(conn)
+    old, subnets = ha_pair(conn), load_subnets(conn) if family == 4 else load_subnets6(conn)
     if old.active and primary_id == old.standby_id:
         subnets = [replace(x, interface=old.standby_name_for(x.interface)) for x in subnets]
     return subnets
@@ -850,7 +874,8 @@ async def pair_preview(request: Request, user: User = Depends(require_admin), co
                                                  'ca': pki.ca_pem().decode()})}
         served = interfaces_of(primary)
         results.append(apply.preview(conn, _settings(request), row, pair=pair, interfaces=served,
-                                     subnet_list=_subnets_for_pair(conn, primary['id'])))
+                                     subnet_list=_subnets_for_pair(conn, primary['id']),
+                                     subnet6_list=_subnets_for_pair(conn, primary['id'], 6)))
     for gone in store.leaving_pair(ha_pair(conn), primary['id'], standby['id']):
         row = nodes.get_node(conn, gone)
         results.insert(0, apply.preview(conn, _settings(request), row, pair=pair, interfaces=[]))
@@ -875,7 +900,7 @@ async def pair_apply(request: Request, user: User = Depends(require_admin), conn
                          f"pair {primary['name']} (primary) with {standby['name']} (standby)", user.username,
                          change=lambda c: store.set_pair(c, pki, primary['id'], standby['id'], values['primary_address'],
                                                          values['standby_address'], values['port'],
-                                                         values.get('interface_map')),
+                                                         values.get('interface_map'), values.get('port6')),
                          undo=lambda c: store.restore(c, snap))
     return RedirectResponse(f'/jobs/{job_id}', status_code=303)
 

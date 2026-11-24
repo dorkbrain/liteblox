@@ -116,9 +116,32 @@ curl -s -H "Authorization: Bearer $TOKEN" -X DELETE $LB/api/v1/dhcp/leases/192.1
 - The settings in `GET /dhcp` include where clients are registered in DNS: `ddns_mode` (`liteblox`, `external` or `off`), and for `external` the `ddns_server` and `ddns_port` (never the key's secret). A subnet's `ddns` (`zone`, `suffix`) is where its clients go under that mode (`null` when it registers nothing).
 - Only one DHCP change runs at a time: another one gets **409** until the running job has finished.
 
+### DHCPv6
+
+The [IPv6](/help/ipv6) subnets have their own calls under `/api/v1/dhcp6`, with their own subnet ids:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" $LB/api/v1/dhcp6             # which nodes run kea-dhcp6, settings
+curl -s -H "Authorization: Bearer $TOKEN" $LB/api/v1/dhcp6/subnets     # pools, delegated-prefix pools, reservations
+curl -s -H "Authorization: Bearer $TOKEN" $LB/api/v1/dhcp6/leases      # live from kea-dhcp6 (?subnet=ID)
+
+# reserve an address and a delegated prefix for a router, by its DUID
+curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+     -X POST $LB/api/v1/dhcp6/subnets/1/reservations \
+     -d '{"duid": "00:01:00:01:2c:4f:aa:bb:52:54:00:12:34:56", "ip_address": "fd00:1:2:100::50", "prefix": "fd00:1:2:f010::/60", "hostname": "router2"}'
+
+# delete a lease, or a delegated prefix as prefix/len
+curl -s -H "Authorization: Bearer $TOKEN" -X DELETE $LB/api/v1/dhcp6/leases/fd00:1:2:100::1003
+curl -s -H "Authorization: Bearer $TOKEN" -X DELETE $LB/api/v1/dhcp6/leases/fd00:1:2:f020::/60
+```
+
+- A reservation names its client by `duid` or `hw_address` (one of them), and holds an `ip_address`, a `prefix`, both, or neither (name-only, as in DHCPv4). `PATCH` and `DELETE` work as for DHCPv4.
+- A lease's `type` is `address` or `prefix`; a delegated prefix also has `prefix` (`ip/len`). Its `mac` is there only when Kea learned one.
+- A subnet's `ra` and `ra_slaac` say whether the serving nodes send [router advertisements](/help/ipv6#router-advertisements); turning them on is on the pages.
+
 ## Search
 
-`GET /api/v1/search?q=…` is the [Search](/help/search) page as JSON: `records`, `reservations`, `leases`, `zones`, `subnets` and `devices`, each with its `count` and up to `limit` (default 200) `items`. A query for one IPv4 address also gets `address`: its names, PTR, reservation, lease, subnet, and the `checks` that didn't add up. A dynamic zone searched from its history because its primary didn't answer gives its records `as_of`; what a short query didn't read live is in `skipped`. A read-only token is enough.
+`GET /api/v1/search?q=…` is the [Search](/help/search) page as JSON: `records`, `reservations`, `leases`, `zones`, `subnets` and `devices`, each with its `count` and up to `limit` (default 200) `items`. Reservations, leases and subnets carry `family` (4 or 6), since DHCPv4 and DHCPv6 subnets number their ids apart; DHCPv6 ones add the `duid` (and a lease its `type` and `prefix`). A query for one address, IPv4 or IPv6, also gets `address`: its names, PTR, reservation, lease, subnet, and the `checks` that didn't add up. A dynamic zone searched from its history because its primary didn't answer gives its records `as_of`; what a short query didn't read live is in `skipped`. A read-only token is enough.
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" "$LB/api/v1/search?q=192.168.0.50" | jq .address
@@ -145,6 +168,7 @@ curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
 - `next-free` takes one of `network` (an IPAM network's id or prefix), `range` (a range's id) or `subnet` (a DHCP subnet: outside its pools, for a reservation), and `count` (1 to 64), `align`, `hold`, `minutes`. Its answer says whether the addresses were `checked` on the network, and gives the `hold_id`. `DELETE /ipam/holds/{ip}` or `DELETE /ipam/holds?hold_id=` releases them early.
 - `assign` with a `mac` (or `macs`, one per address) makes DHCP reservations, with the name as their hostname; without, A records in `zone` (or the zone the full name is in), then a publish unless `publish` is false. With `"target": "ipam"` (the default when the DNS module is off) it makes [IPAM records](/help/ipam#ipam-records) instead of A records: nothing goes to DNS, and a MAC outside the DHCP subnets stays on the record. Its answer lists the `jobs`, and what each address got in `kinds` (`static`, `reservation`, `ipam`).
 - `names` are the IPAM records: `GET /ipam/names` (`network` to narrow it), `GET`, `PUT` (`name`, `mac`, `comment`) and `DELETE /ipam/names/{ip}`. A network's `addresses` give each one's `ipam_name`, and its `rdns` when a resolver is set ([PTR lookups](/help/ipam#ptr-lookups-rdns)).
+- An IPv6 network has one page of `addresses`: the ones LiteBlox knows of there ([IPv6 networks](/help/ipam#ipv6-networks)), and its `used` counts those. `next-free` and `assign` are IPv4 only and say so; name an IPv6 address with an AAAA record, a DHCPv6 reservation, or `PUT /ipam/names/{ip}`.
 - `unassign` takes `ips`, a `range` (`"192.168.10.81-192.168.10.83"`) or a `group`, and removes only what `assign` made: anything else at those addresses is listed in `skipped`.
 
 These need a full token; the reads work with a read-only one.
@@ -162,6 +186,7 @@ lbcli.py reserve nas --network 192.168.1.0/24 --ipam                        # a 
 lbcli.py unassign --group k8s
 lbcli.py release --hold 3f9c0a1b2c4d
 lbcli.py show 192.168.1.20
+lbcli.py show fd00:1:2:100::50                    # IPv6 too: names, reservation (by DUID), lease
 ```
 
 With LiteBlox's own [HTTPS](/help/https) and a self-signed certificate, give the certificate (**Settings → HTTPS → Download the certificate**) with `--ca FILE` or `LITEBLOX_CA`, rather than turning the check off with `--insecure`.
@@ -204,6 +229,6 @@ These are on the pages:
 - creating and deleting zones, and zone settings
 - nodes (setup, take over, Repair, server settings, promote), except upgrading an agent
 - TSIG keys and ACLs
-- DHCP subnets, settings, interfaces and the failover pair
+- DHCP and DHCPv6 subnets, settings, interfaces and the failover pair, and router advertisements
 
 Every write through the API is in the audit log under the token's user, with the token's name.

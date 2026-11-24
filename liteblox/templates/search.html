@@ -13,7 +13,7 @@
 </form>
 
 {% if not q %}
-<p class="muted">Search every zone's records, the DHCP reservations and leases, the zones and the subnets: a name or part of one, an IP address (<code>192.168.1.20</code>), a network (<code>192.168.1.0/24</code>) or a MAC address, whole or in part. <a href="/help/search">How search works</a></p>
+<p class="muted">Search every zone's records, the DHCP reservations and leases, the zones and the subnets: a name or part of one, an IP address (<code>192.168.1.20</code>, <code>fd00:1:2:100::20</code>), a network (<code>192.168.1.0/24</code>, <code>fd00:1:2:100::/64</code>) or a MAC address or DUID, whole or in part. <a href="/help/search">How search works</a></p>
 {% elif not res %}
 <p class="muted">Type at least {{ min_length }} characters.</p>
 {% else %}
@@ -25,10 +25,10 @@
 {% if res.address %}{% set a = res.address %}
 <section class="card spaced" id="address">
   {% set mods = modules_on(request) %}{% set back = '/search?q=' ~ a.ip ~ '#address' %}
-  <h2><code>{{ a.ip }}</code>{% if user.is_admin and (a.names or a.ptrs or a.reservations or a.ipam) %} <a class="small" href="/addresses/{{ a.ip }}/move?back={{ back|urlencode }}">Move to…</a>{% endif %}</h2>
+  <h2><code>{{ a.ip }}</code>{% if user.is_admin and a.ip.version == 4 and (a.names or a.ptrs or a.reservations or a.ipam) %} <a class="small" href="/addresses/{{ a.ip }}/move?back={{ back|urlencode }}">Move to…</a>{% endif %}</h2>
   <dl class="facts">
     {% if mods.dns or a.names or a.ptrs %}
-    <dt>Names</dt><dd>{% for h in a.names %}<a href="{{ record_link(h) }}"><code>{{ h.rec.fqdn }}</code></a>{% if h.draft %} <span class="pill">draft</span>{% endif %}{{ ', ' if not loop.last }}{% else %}<span class="muted">no A record</span>{% endfor %}</dd>
+    <dt>Names</dt><dd>{% for h in a.names %}<a href="{{ record_link(h) }}"><code>{{ h.rec.fqdn }}</code></a>{% if h.draft %} <span class="pill">draft</span>{% endif %}{{ ', ' if not loop.last }}{% else %}<span class="muted">no {{ 'A' if a.ip.version == 4 else 'AAAA' }} record</span>{% endfor %}</dd>
     <dt>PTR</dt><dd>{% for h in a.ptrs %}<a href="{{ record_link(h) }}"><code>{{ h.rec.target or h.rec.rdata }}</code></a> <span class="muted small">in {{ h.zone }}</span>{{ ', ' if not loop.last }}{% else %}<span class="muted">{{ 'none in ' ~ a.reverse_zone if a.reverse_zone else 'no reverse zone' }}</span>{% endfor %}</dd>
     {% endif %}
     {% if mods.ipam and (a.ipam or not mods.dns or not a.reverse_zone) %}
@@ -38,11 +38,11 @@
     {% if mods.ipam and a.resolver %}
     <dt>rDNS</dt><dd>{% if a.rdns %}{% if a.rdns.name %}<code>{{ a.rdns.name }}</code>{% elif a.rdns.error %}<span class="error-text small">{{ a.rdns.error }}</span>{% else %}<span class="muted">no PTR</span>{% endif %} <span class="muted small">at {{ a.resolver }}, {{ a.rdns.looked_up_at|reltime }}</span>{% else %}<span class="muted">being looked up at {{ a.resolver }}: reload in a moment</span>{% endif %}</dd>
     {% endif %}
-    <dt>Reservation</dt><dd>{% for r in a.reservations %}<a href="/dhcp/subnets/{{ r.subnet_id }}/addresses?filter={{ a.ip }}"><code>{{ r.hw_address }}</code></a>{% if r.hostname %} <code>{{ r.hostname }}</code>{% endif %}{% if not r.ip_address %} <span class="muted small" title="the client gets any pool address, registered under this name">name only</span>{% endif %}{% if r.comment %} <span class="muted small">{{ r.comment }}</span>{% endif %}{% else %}<span class="muted">none</span>{% endfor %}</dd>
-    <dt>Lease</dt><dd>{% if a.lease %}{% set l = a.lease %}<code>{{ l.mac }}</code>{% if l.hostname %} <code>{{ l.hostname }}</code>{% endif %} <span class="pill {{ 'ready' if l.state == 'active' else '' }}">{{ l.state }}</span>{% if l.state == 'active' and l.expires_in > 0 %} <span class="muted small" title="{{ l.expires|localtime }}">ends in {{ l.expires_in|duration }}</span>{% endif %}{% if a.lease_node %} <span class="muted small">on {{ a.lease_node.name }}</span>{% endif %}{% else %}<span class="muted">none</span>{% endif %}</dd>
+    <dt>Reservation</dt><dd>{% for r in a.reservations %}<a href="/dhcp/{{ 'v6/' if r.duid is defined }}subnets/{{ r.subnet_id }}/addresses?filter={{ a.ip }}"><code>{{ r.hw_address or r.duid }}</code></a>{% if r.hostname %} <code>{{ r.hostname }}</code>{% endif %}{% if not r.ip_address %} <span class="muted small" title="the client gets any pool address, registered under this name">name only</span>{% endif %}{% if r.comment %} <span class="muted small">{{ r.comment }}</span>{% endif %}{% else %}<span class="muted">none</span>{% endfor %}</dd>
+    <dt>Lease</dt><dd>{% if a.lease %}{% set l = a.lease %}<code>{{ l.mac or l.duid }}</code>{% if l.hostname %} <code>{{ l.hostname }}</code>{% endif %} <span class="pill {{ 'ready' if l.state == 'active' else '' }}">{{ l.state }}</span>{% if l.state == 'active' and l.expires_in > 0 %} <span class="muted small" title="{{ l.expires|localtime }}">ends in {{ l.expires_in|duration }}</span>{% endif %}{% if a.lease_node %} <span class="muted small">on {{ a.lease_node.name }}</span>{% endif %}{% else %}<span class="muted">none</span>{% endif %}</dd>
     <dt>Seen</dt><dd>{% for x in a.seen %}<a href="/ipam/devices/{{ x.mac }}"><code>{{ x.mac }}</code></a>{% if a.expected and x.mac in a.expected.macs %} <span class="pill">expected</span>{% endif %}{% set v = vendor(request, x.mac) %}{% if v %} <span class="muted small">{{ v }}</span>{% endif %} <span class="muted small">{{ x.last_seen|reltime }}{% if x.node %} by {{ x.node }}{% endif %}</span>{% if not loop.last %}<br>{% endif %}{% else %}<span class="muted">not by the nodes in the last {{ keep_days }} days</span>{% endfor %}</dd>
     {% if a.network %}<dt>Network</dt><dd><a href="/ipam/networks/{{ a.network.id }}?ip={{ a.ip }}">{{ a.network.label }}</a>{% if a.network.name %} <code class="muted">{{ a.network.prefix }}</code>{% endif %}{% if a.range %} <span class="muted small">· {{ a.range.label }}</span>{% endif %}</dd>{% endif %}
-    <dt>Subnet</dt><dd>{% if a.subnet %}<a href="/dhcp/subnets/{{ a.subnet.id }}"><code>{{ a.subnet.prefix }}</code></a> <span class="muted small">{{ 'in a pool' if a.in_pool else 'outside the pools' }}</span>{% else %}<span class="muted">not in a DHCP subnet</span>{% endif %}</dd>
+    <dt>Subnet</dt><dd>{% if a.subnet %}<a href="{{ a.subnet.url }}"><code>{{ a.subnet.prefix }}</code></a> <span class="muted small">{{ 'in a pool' if a.in_pool else 'outside the pools' }}</span>{% else %}<span class="muted">not in a DHCP subnet</span>{% endif %}</dd>
   </dl>
   {% if a.flapping %}
   <div class="notice spaced flap"><strong>{{ a.flapping.macs|length }} different MACs on {{ a.ip }}</strong> ({{ a.flapping.changes }} changes in {{ flap_minutes }} minutes): two devices may be using this address. {{ a.flapping.macs|join(', ') }}.
@@ -100,13 +100,13 @@
 <section class="card spaced" id="reservations">
   <h2>Reservations <span class="count">{{ res.reservations.count }}</span></h2>
   <div class="table-wrap"><table>
-    <thead><tr><th>IP</th><th>MAC</th><th>Name</th><th>Subnet</th></tr></thead>
+    <thead><tr><th>IP</th><th>MAC / DUID</th><th>Name</th><th>Subnet</th></tr></thead>
     <tbody>{% for h in res.reservations.hits %}{% set r = h.r %}
     <tr>
-      <td>{% if r.ip_address %}<a href="/dhcp/subnets/{{ h.subnet.id }}/addresses?filter={{ r.ip_address|urlencode }}"><code>{{ mark(r.ip_address, query) }}</code></a>{% else %}<a class="muted" href="/dhcp/subnets/{{ h.subnet.id }}/reservations/{{ r.id }}" title="a name-only reservation: the client gets any pool address">any</a>{% endif %}</td>
-      <td><code>{{ mark(r.hw_address, query) }}</code>{% set v = vendor(request, r.hw_address) %}{% if v %}<div class="muted small">{{ v }}</div>{% endif %}</td>
+      <td>{% if r.ip_address %}<a href="{{ h.subnet.url }}/addresses?filter={{ r.ip_address|urlencode }}"><code>{{ mark(r.ip_address, query) }}</code></a>{% if r.prefix %}<br>{% endif %}{% endif %}{% if r.prefix %}<a href="{{ h.subnet.url }}/addresses?filter={{ r.prefix|urlencode }}"><code>{{ mark(r.prefix, query) }}</code></a>{% endif %}{% if not r.ip_address and not r.prefix %}<a class="muted" href="{{ h.subnet.url }}/reservations/{{ r.id }}" title="a name-only reservation: the client gets any pool address">any</a>{% endif %}</td>
+      <td><code>{{ mark(r.hw_address or r.duid, query) }}</code>{% set v = vendor(request, r.hw_address) if r.hw_address else '' %}{% if v %}<div class="muted small">{{ v }}</div>{% endif %}</td>
       <td>{% if r.hostname %}<code>{{ mark(r.hostname, query) }}</code>{% else %}<span class="muted">none</span>{% endif %}{% if r.comment %}<div class="muted small">{{ mark(r.comment, query) }}</div>{% endif %}</td>
-      <td><a href="/dhcp/subnets/{{ h.subnet.id }}"><code>{{ h.subnet.prefix }}</code></a></td>
+      <td><a href="{{ h.subnet.url }}"><code>{{ h.subnet.prefix }}</code></a></td>
     </tr>{% endfor %}</tbody>
   </table></div>
   {{ more(res.reservations) }}
@@ -117,14 +117,14 @@
 <section class="card spaced" id="leases">
   <h2>Leases <span class="count">{{ res.leases.count }}</span></h2>
   <div class="table-wrap"><table>
-    <thead><tr><th>IP</th><th>MAC</th><th>Name</th><th>State</th><th>Subnet</th></tr></thead>
-    <tbody>{% for h in res.leases.hits %}{% set l = h.lease %}
+    <thead><tr><th>IP</th><th>MAC / DUID</th><th>Name</th><th>State</th><th>Subnet</th></tr></thead>
+    <tbody>{% for h in res.leases.hits %}{% set l = h.lease %}{% set shown = l.prefix or l.ip %}
     <tr>
-      <td>{% if h.subnet %}<a href="/dhcp/subnets/{{ h.subnet.id }}/addresses?filter={{ l.ip|urlencode }}"><code>{{ mark(l.ip, query) }}</code></a>{% else %}<code>{{ mark(l.ip, query) }}</code>{% endif %}</td>
-      <td><a href="/ipam/devices/{{ l.mac|urlencode }}"><code>{{ mark(l.mac, query) }}</code></a>{% set v = vendor(request, l.mac) %}{% if v %}<div class="muted small">{{ v }}</div>{% endif %}</td>
+      <td>{% if h.subnet %}<a href="{{ h.subnet.url }}/addresses?filter={{ shown|urlencode }}"><code>{{ mark(shown, query) }}</code></a>{% else %}<code>{{ mark(shown, query) }}</code>{% endif %}</td>
+      <td>{% if l.mac %}<a href="/ipam/devices/{{ l.mac|urlencode }}"><code>{{ mark(l.mac, query) }}</code></a>{% set v = vendor(request, l.mac) %}{% if v %}<div class="muted small">{{ v }}</div>{% endif %}{% endif %}{% if l.duid %}<div><code class="small">{{ mark(l.duid, query) }}</code></div>{% endif %}</td>
       <td>{% if l.hostname %}<code>{{ mark(l.hostname, query) }}</code>{% else %}<span class="muted">none</span>{% endif %}</td>
       <td class="nowrap"><span class="pill {{ 'ready' if l.state == 'active' else '' }}">{{ l.state }}</span>{% if l.state == 'active' and l.expires_in > 0 %} <span class="muted small" title="{{ l.expires|localtime }}">ends in {{ l.expires_in|duration }}</span>{% endif %}</td>
-      <td>{% if h.subnet %}<a href="/dhcp/subnets/{{ h.subnet.id }}"><code>{{ h.subnet.prefix }}</code></a>{% else %}<span class="muted">subnet {{ l.subnet_id }}</span>{% endif %}</td>
+      <td>{% if h.subnet %}<a href="{{ h.subnet.url }}"><code>{{ h.subnet.prefix }}</code></a>{% else %}<span class="muted">subnet {{ l.subnet_id }}</span>{% endif %}</td>
     </tr>{% endfor %}</tbody>
   </table></div>
   <p class="muted small">Read from Kea just now{% if query.kind not in ('ip',) and not (query.kind == 'mac' and query.mac|length == 12) %}; only active leases are shown unless you search for an exact address or MAC{% endif %}.</p>
@@ -173,8 +173,8 @@
     </tr>{% endfor %}
     {% for h in res.subnets.hits %}{% set s = h.subnet %}
     <tr>
-      <td><a href="/dhcp/subnets/{{ s.id }}"><code>{{ mark(s.prefix, query) }}</code></a></td>
-      <td class="nowrap">DHCP subnet <span class="muted small">on {{ s.interface }}</span></td>
+      <td><a href="{{ s.url }}"><code>{{ mark(s.prefix, query) }}</code></a></td>
+      <td class="nowrap">{{ 'DHCPv6' if s.family == 6 else 'DHCP' }} subnet <span class="muted small">on {{ s.interface }}</span></td>
       <td>{% if s.comment %}<span class="small">{{ mark(s.comment, query) }}</span>{% endif %}</td>
     </tr>{% endfor %}
     </tbody>

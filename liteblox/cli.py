@@ -290,7 +290,7 @@ def cmd_node_bootstrap(args):
     creds = bootstrap.Credentials(args.ssh_user, password=password, use_local_keys=args.use_ssh_keys)
     options = bootstrap.Options(bind=args.bind, install_bind=args.install_bind,
                                 fix_permissions=not args.no_fix_permissions,
-                                takeover=not args.no_takeover, dhcp=args.dhcp, ntp=args.ntp)
+                                takeover=not args.no_takeover, dhcp=args.dhcp, ntp=args.ntp, radvd=args.radvd)
     job_id = service.start_bootstrap(settings, node['id'], creds, options, 'cli',
                                      background=False, echo=print)
     status = conn.execute('SELECT status FROM jobs WHERE id = ?', (job_id,)).fetchone()[0]
@@ -683,6 +683,9 @@ def build_parser():
                        help="don't let LiteBlox generate the whole BIND config afterwards")
     nboot.add_argument('--dhcp', action='store_true',
                        help='set up Kea DHCP (a config that serves nothing until a subnet is added)')
+    nboot.add_argument('--radvd', action='store_true',
+                       help='set up radvd, for DHCPv6 subnets that send router advertisements (needs DHCP; '
+                            'sends nothing until a subnet turns them on)')
     nboot.add_argument('--ntp', action='store_true',
                        help='set up time sync: chrony with the sources on Settings → Time (replaces systemd-timesyncd)')
     nboot.set_defaults(func=cmd_node_bootstrap)

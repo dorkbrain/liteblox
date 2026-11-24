@@ -157,13 +157,18 @@ def cmd_release(args):
     print(f"✓ released {', '.join(answer['released']) or 'nothing (no such hold)'}")
 
 
+def _client(x):
+    """A DHCP client as Search names it: its MAC, or a DHCPv6 client's DUID."""
+    return x.get('mac') or (f"duid {x['duid']}" if x.get('duid') else '?')
+
+
 def cmd_show(args):
     answer = call(args, 'GET', '/search', query={'q': args.ip})
     a = answer.get('address')
     if args.json:
         return a or answer
     if not a:
-        raise Failed(f'{args.ip} is not an IPv4 address')
+        raise Failed(f'{args.ip} is not an IP address')
     r, lease = a.get('reservation'), a.get('lease')
     # a module that's off gets no '-' lines (an IPAM-only install has no names or leases to show)
     on = set(call(args, 'GET', '/status').get('modules') or ('dns', 'dhcp'))
@@ -176,8 +181,8 @@ def cmd_show(args):
     if a.get('rdns'):
         print(f"  rdns         {a['rdns']['name'] or a['rdns']['error'] or 'no PTR'}")
     if 'dhcp' in on or r or lease or a.get('subnet'):
-        print(f"  reservation  {r['mac'] + ' ' + (r['hostname'] or '') if r else '-'}")
-        print(f"  lease        {lease['mac'] + ' ' + lease['state'] if lease else '-'}")
+        print(f"  reservation  {_client(r) + ' ' + (r['hostname'] or '') if r else '-'}")
+        print(f"  lease        {_client(lease) + ' ' + lease['state'] if lease else '-'}")
         print(f"  subnet       {a.get('subnet') or '-'}")
     for c in a.get('checks') or []:
         print(f"  {c['level']:<12} {c['text']}")

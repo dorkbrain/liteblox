@@ -29,23 +29,26 @@ def serving(conn):
     return [n for n in nodes.list_nodes(conn) if n['dhcp'] and interfaces_of(n)]
 
 
-def serving_leases(settings, conn):
+def serving_leases(settings, conn, family=4):
     """([(node, lease), ...] from every serving node, [errors]). A pair holds the same leases on both
     servers: read the primary's, or the standby's when the primary doesn't answer."""
-    from .model import ha_pair
+    from .model import ha_pair, has_dhcp6
     out, errors = [], []
     pair = ha_pair(conn)
     found = serving(conn)
+    read = leases
+    if family == 6:
+        found, read = [n for n in found if has_dhcp6(n)], leases6
     if pair.active:
         for n in [n for i in (pair.primary_id, pair.standby_id) for n in found if n['id'] == i]:
             try:
-                return [(n, lease) for lease in leases(settings, n)], errors
+                return [(n, lease) for lease in read(settings, n)], errors
             except LeaseError as e:
                 errors.append(str(e))
         return out, errors
     for n in found:
         try:
-            out += [(n, lease) for lease in leases(settings, n)]
+            out += [(n, lease) for lease in read(settings, n)]
         except LeaseError as e:
             errors.append(str(e))
     return out, errors
@@ -235,3 +238,179 @@ def dns_zone(conn, hostname):
         if (name == zone or name.endswith('.' + zone)) and (best is None or len(zone) > len(best)):
             best = zone
     return best
+
+
+# ── DHCPv6 ─────────────────────────────────────────────────────────────────────
+
+TYPES6 = {'IA_NA': 'address', 'IA_PD': 'prefix', 0: 'address', 2: 'prefix'}
+
+
+def leases6(settings, node, subnet_id=None, now=None):
+    """Every DHCPv6 lease on the node (or in one subnet): addresses by IP, then delegated prefixes."""
+    now = now or time.time()
+    out, start = [], 'start'
+    try:
+        with nodes.agent_client(settings, node, timeout=30.0) as c:
+            while True:
+                answer = c.dhcp_command('dhcp6', 'lease6-get-page', {'from': start, 'limit': PAGE})
+                if answer.get('result') == 3:
+                    break
+                if answer.get('result') != 0:
+                    raise LeaseError(f"{node['name']}: {answer.get('text')}")
+                page = (answer.get('arguments') or {}).get('leases') or []
+                out += [_lease6(row, now) for row in page]
+                if len(page) < PAGE:
+                    break
+                start = page[-1]['ip-address']
+    except AgentError as e:
+        raise LeaseError(f"{node['name']}: {e.message}")
+    if subnet_id is not None:
+        out = [lease for lease in out if lease['subnet_id'] == subnet_id]
+    return sorted(out, key=lease6_order)
+
+
+def lease6_order(lease):
+    return (lease['type'] == 'prefix', int(ipaddress.ip_address(lease['ip'])), lease.get('prefix_len') or 128)
+
+
+def _lease6(row, now):
+    expires = row.get('cltt', 0) + row.get('valid-lft', 0)
+    kind = TYPES6.get(row.get('type', 'IA_NA'), 'address')
+    length = row.get('prefix-len', 128)
+    return {'ip': row['ip-address'], 'type': kind, 'prefix_len': length,
+            'prefix': f"{row['ip-address']}/{length}" if kind == 'prefix' else '',
+            'duid': row.get('duid', ''), 'iaid': row.get('iaid'), 'mac': row.get('hw-address', ''),
+            'hostname': (row.get('hostname') or '').rstrip('.'), 'subnet_id': row.get('subnet-id'),
+            'state': STATES.get(row.get('state', 0), str(row.get('state'))), 'expires': expires,
+            'expires_in': int(expires - now), 'registered': bool(row.get('fqdn-fwd'))}
+
+
+def pool_ranges6(subnet):
+    from .validate6 import pool_range6
+    network = ipaddress.ip_network(subnet.prefix)
+    out = []
+    for p in subnet.pools:
+        try:
+            out.append(pool_range6(p, network))
+        except ValueError:
+            pass
+    return out
+
+
+def pool_size6(subnet):
+    return sum(int(last) - int(first) + 1 for first, last in pool_ranges6(subnet))
+
+
+def pd_size(subnet):
+    """How many prefixes the subnet's delegated-prefix pools hold."""
+    return sum(2 ** (int(p['delegated_len']) - ipaddress.ip_network(p['prefix']).prefixlen) for p in subnet.pd_pools)
+
+
+def pool_use6(conn, found):
+    """{subnet id: {addresses, in_pool, prefixes, size}} for every DHCPv6 subnet, from serving_leases(..., 6): active
+    address leases, the pool addresses taken (active or declined), and delegated prefixes."""
+    from .model import subnets6
+    out = {}
+    for s in subnets6(conn):
+        ranges = pool_ranges6(s)
+        mine = [lease for _, lease in found if lease['subnet_id'] == s.id]
+        taken = {ipaddress.ip_address(x['ip']) for x in mine if x['type'] == 'address' and x['state'] in TAKEN}
+        out[s.id] = {'addresses': sum(1 for x in mine if x['type'] == 'address' and x['state'] == 'active'),
+                     'in_pool': sum(1 for ip in taken if any(f <= ip <= l for f, l in ranges)),
+                     'prefixes': sum(1 for x in mine if x['type'] == 'prefix' and x['state'] == 'active'),
+                     'size': pool_size6(s)}
+    return out
+
+
+def counts6(found):
+    """{subnet id: {addresses, prefixes}} of active DHCPv6 leases, from serving_leases(..., family=6)."""
+    out = {}
+    for _, lease in found:
+        if lease['state'] == 'active':
+            mine = out.setdefault(lease['subnet_id'], {'addresses': 0, 'prefixes': 0})
+            mine['prefixes' if lease['type'] == 'prefix' else 'addresses'] += 1
+    return out
+
+
+def _matches(r, lease):
+    """Is this lease the reserved client's (by DUID, or by the MAC Kea learned)?"""
+    if r.duid:
+        return (lease.get('duid') or '').lower() == r.duid
+    return bool(lease.get('mac')) and lease['mac'].lower() == r.hw_address
+
+
+def addresses6(subnet, found):
+    """One row per address and delegated prefix in a DHCPv6 subnet, its lease and reservation merged, as
+    addresses() does for DHCPv4: [{ip, kind, duid, mac, hostname, lease, reservation, state, label, pill,
+    in_pool}]. kind: 'address' or 'prefix' (ip is then 'prefix/len')."""
+    ranges = pool_ranges6(subnet)
+    by_key = {}
+    for lease in found:
+        if lease['subnet_id'] != subnet.id:
+            continue
+        key = lease['prefix'] if lease['type'] == 'prefix' else lease['ip']
+        held = by_key.get(key)
+        if held is None or (lease['state'] == 'active' and held['state'] != 'active'):
+            by_key[key] = lease
+    reserved = {}
+    for r in subnet.reservations:
+        if r.ip_address:
+            reserved[r.ip_address] = r
+        if r.prefix:
+            reserved[r.prefix] = r
+    named, offline = {}, []
+    for r in subnet.reservations:
+        if not r.ip_address and not r.prefix:
+            key = next((k for k, lease in by_key.items() if lease['state'] == 'active' and lease['type'] == 'address'
+                        and _matches(r, lease)), None)
+            if key and key not in reserved:
+                named[key] = r
+            else:
+                offline.append(r)
+
+    def order(key):
+        net = ipaddress.ip_network(key, strict=False)
+        return ('/' in key, int(net.network_address), net.prefixlen)
+    rows = []
+    for key in sorted(set(by_key) | set(reserved), key=order):
+        lease, r = by_key.get(key), reserved.get(key) or named.get(key)
+        kind = 'prefix' if '/' in key else 'address'
+        active = lease is not None and lease['state'] == 'active'
+        in_pool = kind == 'address' and any(first <= ipaddress.ip_address(key) <= last for first, last in ranges)
+        if r is not None and not r.ip_address and not r.prefix:
+            state = 'named'
+        elif r is not None:
+            state = 'offline' if not active else 'online' if _matches(r, lease) else 'taken'
+        elif active:
+            state = 'leased' if in_pool or kind == 'prefix' else 'outside'
+        else:
+            state = lease['state']
+        label, pill = STATES_SHOWN.get(state, (state, ''))
+        if kind == 'prefix' and state == 'leased':
+            label = 'delegated'
+        rows.append({'ip': key, 'kind': kind, 'duid': (r.duid if r else '') or (lease or {}).get('duid', ''),
+                     'mac': (r.hw_address if r else '') or (lease or {}).get('mac', ''),
+                     'hostname': (r.hostname if r and r.hostname else lease['hostname'] if lease else ''),
+                     'lease': lease, 'reservation': r, 'state': state, 'label': label, 'pill': pill,
+                     'in_pool': in_pool})
+    for r in sorted(offline, key=lambda r: r.duid or r.hw_address):
+        label, pill = STATES_SHOWN['named-offline']
+        rows.append({'ip': '', 'kind': 'address', 'duid': r.duid, 'mac': r.hw_address, 'hostname': r.hostname,
+                     'lease': None, 'reservation': r, 'state': 'named-offline', 'label': label, 'pill': pill,
+                     'in_pool': False})
+    return rows
+
+
+def delete6(settings, node, ip, kind='address', update_ddns=True):
+    """Delete a DHCPv6 lease (an address, or a delegated prefix by its 'prefix/len' or address)."""
+    address = ip.split('/', 1)[0]
+    with nodes.agent_client(settings, node, timeout=30.0) as c:
+        try:
+            answer = c.dhcp_command('dhcp6', 'lease6-del', {'ip-address': address,
+                                                            'type': 'IA_PD' if kind == 'prefix' else 'IA_NA',
+                                                            'update-ddns': update_ddns})
+        except AgentError as e:
+            raise LeaseError(f"{node['name']}: {e.message}")
+    if answer.get('result') != 0:
+        raise LeaseError(answer.get('text') or f'Kea did not delete the lease on {ip}')
+    return answer

@@ -138,7 +138,7 @@ The next publish of the forward zone also sends them again. Discarding a later d
 
 ## Stale DHCP names
 
-Kea removes the name it registered when the lease ends. Sometimes that update is lost: the primary was down, a promote was under way, or Kea's lease file was reset. The name then stays in the zone, pointing at an address someone else may get. **Stale names** above the grid of a dynamic zone lists the names Kea registered (an A record with a **DHCID** beside it) and says which are stale.
+Kea removes the name it registered when the lease ends. Sometimes that update is lost: the primary was down, a promote was under way, or Kea's lease file was reset. The name then stays in the zone, pointing at an address someone else may get. **Stale names** above the grid of a dynamic zone lists the names Kea registered (an A or AAAA record with a **DHCID** beside it) and says which are stale. DHCP and DHCPv6 leases and reservations both count.
 
 A name is **stale** when all of these hold:
 
@@ -149,14 +149,20 @@ A name is **stale** when all of these hold:
 
 Kea forgets an expired lease after an hour, so LiteBlox remembers each name's last lease expiry from the health check's lease reads. A name it never saw a lease for counts from when it first noticed it, so after an install or a re-adopt nothing is stale before a full reclaim time has passed. Names nobody gave a DHCID (typed in, ACME, another key's) are never stale.
 
-**Delete the ticked names** removes the stale names at once (tick or untick any): their A and DHCID records in one update, and in a dynamic reverse zone LiteBlox holds, the PTR that points at each (with its DHCID). A PTR pointing at another name stays.
+**Delete the ticked records** removes the stale names at once (tick or untick any): their A, AAAA and DHCID records in one update, and in a dynamic reverse zone LiteBlox holds (`in-addr.arpa` or `ip6.arpa`), the PTR that points at each (with its DHCID). A PTR pointing at another name stays.
+
+### PTR records without a name
+
+The same view lists the PTR records Kea made (a PTR with a DHCID beside it) in a dynamic reverse zone LiteBlox holds that point at a name in this zone, where that name has no A or AAAA record for the address any more. Kea before 3.3.1 leaves one behind when one family of a [dual-stack name](/help/ipv6) goes, and a lost update can leave one too. A PTR is listed under the zone its name belongs to (the most specific zone LiteBlox has for it).
+
+One is **stale** when no live lease and no reservation has its address, and it has pointed at nothing for longer than the zone's reclaim time, counted from when LiteBlox first noticed it. A PTR whose name gets that address back starts over. Deleting one removes the PTR, and its DHCID when no other PTR is left at that address. PTRs you typed in (no DHCID) are never listed.
 
 ### Reclaiming them on a schedule
 
-Under the zone's **Settings → Stale DHCP names**, **Reclaim stale DHCP names** (off by default) checks the zone once an hour and deletes its stale names the same way. Turning it on shows what would go now. A pass that deletes something runs as a **Reclaim** job (user `liteblox`) whose log names each name and address; it's in the audit log too. A pass holds back, deleting nothing:
+Under the zone's **Settings → Stale DHCP names**, **Reclaim stale DHCP names** (off by default) checks the zone once an hour and deletes its stale names and stale PTR records the same way. Turning it on shows what would go now. A pass that deletes something runs as a **Reclaim** job (user `liteblox`) whose log names each name and address; it's in the audit log too. A pass holds back, deleting nothing:
 
 - while DHCP isn't healthy: a DHCP server doesn't answer or isn't serving, the failover pair isn't in hot-standby, or the leases can't be read
-- when more than a quarter of the zone's DHCP names (and at least 4) would go at once: something is more likely wrong than that many clients leaving. **Needs attention** says so and links to the zone's stale names, where you can delete them yourself.
+- when more than a quarter of the zone's DHCP names (and at least 4) would go at once, or more than a quarter of the PTR records Kea made for its names: something is more likely wrong than that many clients leaving. **Needs attention** says so and links to the zone's stale names, where you can delete them yourself.
 
 ## Dynamic zones on a server you take over
 

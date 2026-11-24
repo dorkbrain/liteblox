@@ -28,30 +28,7 @@
     {% call setting('Search domains', 'domain-search', None, 'f-search') %}{{ field('search') }}{% endcall %}
     {% call setting('NTP servers', 'ntp-servers', ('LiteBlox\'s time servers in this subnet: <code>' ~ suggested_ntp|join(', ') ~ '</code>') if suggested_ntp else None, 'f-ntp') %}{{ field('ntp', suggested_ntp|join(', ') or 'none') }}{% endcall %}
   </section>
-  <section class="card form-card settings spaced" id="dns">
-    <h2>DNS registration</h2>
-    {% if errors.ddns %}<p class="error small">{{ errors.ddns }}</p>{% endif %}
-    {% if ddns_mode == 'off' %}
-    <p class="muted small">DNS registration is off for every subnet: <a href="/dhcp/settings#dns">DHCP → Settings → DNS registration</a> says where it goes.</p>
-    {% if v.ddns %}<input type="hidden" name="ddns" value="1"><input type="hidden" name="ddns_zone_id" value="{{ v.ddns_zone_id }}"><input type="hidden" name="ddns_suffix" value="{{ v.ddns_suffix }}"><input type="hidden" name="ddns_reverse" value="{{ v.ddns_reverse }}">{% endif %}
-    {% elif ddns_mode == 'external' %}
-    {% call setting('Register clients', None, 'Kea adds each client\'s name (A, and a DHCID record that marks it as DHCP\'s) in the domain at ' ~ (ddns_server or 'the DNS server') ~ ', and its PTR in the reverse zone. It removes them when the lease is released or expires, and never overwrites a name it didn\'t register.', 'f-ddns') %}
-      <label class="check"><input type="checkbox" id="f-ddns" name="ddns" value="1" {% if v.ddns %}checked{% endif %} {% if not user.is_admin %}disabled{% endif %}><span>register in DNS at <code>{{ ddns_server or '?' }}</code>{% if ddns_key %}, signed with key <code>{{ ddns_key.name }}</code>{% endif %}</span></label>{% endcall %}
-    {% call setting('Domain', 'ddns-qualifying-suffix', 'Clients are registered as <code>host.DOMAIN</code>, in that zone at the server (it must be the zone\'s primary).', 'f-ddns_suffix') %}{{ field('ddns_suffix', 'dhcp.home.lan') }}{% endcall %}
-    {% call setting('Reverse zones', None, 'Where the PTRs go. Empty: worked out from the subnet' ~ ((': <code>' ~ derived_reverse|join('</code>, <code>') ~ '</code>') if derived_reverse else '') ~ '. Give them when that server\'s reverse zones are cut differently (e.g. <code>168.192.in-addr.arpa</code>).', 'f-ddns_reverse') %}{{ field('ddns_reverse', 'worked out from the subnet') }}{% endcall %}
-    <input type="hidden" name="ddns_zone_id" value="{{ v.ddns_zone_id }}">
-    {% else %}
-    {% call setting('Register clients', None, 'Kea adds each client\'s name (A, and a DHCID record that marks it as DHCP\'s) to the zone, and its PTR to the dynamic reverse zone that covers the subnet. It removes them when the lease is released or expires, and never overwrites a name it didn\'t register.' ~ ('' if ddns_key else ' Pick the key it signs with first: <a href="/dhcp/settings">DHCP → Settings</a>.'), 'f-ddns') %}
-      <label class="check"><input type="checkbox" id="f-ddns" name="ddns" value="1" {% if v.ddns %}checked{% endif %} {% if not user.is_admin %}disabled{% endif %}><span>register in DNS{% if ddns_key %}, signed with key <code>{{ ddns_key.name }}</code>{% endif %}</span></label>{% endcall %}
-    {% call setting('Zone', None, 'A dynamic forward zone. A subdomain just for DHCP clients keeps their names apart from yours.', 'f-ddns_zone_id') %}
-      <select id="f-ddns_zone_id" name="ddns_zone_id" {% if not user.is_admin %}disabled{% endif %}><option value="">choose…</option>
-        {% for z in ddns_zones %}<option value="{{ z.id }}" {% if v.ddns_zone_id|string == z.id|string %}selected{% endif %}>{{ z.name }}</option>{% endfor %}</select>
-      {% if not ddns_zones %}<span class="muted small">no dynamic forward zone yet</span>{% endif %}
-      {% if errors.ddns_zone_id %}<div class="error-text small">{{ errors.ddns_zone_id }}</div>{% endif %}{% endcall %}
-    {% call setting('Name suffix', 'ddns-qualifying-suffix', 'Clients are registered as <code>host.SUFFIX</code>. Empty: the zone itself; or a name inside it, e.g. <code>dhcp.home.lab</code>.', 'f-ddns_suffix') %}{{ field('ddns_suffix', 'the zone') }}{% endcall %}
-    <input type="hidden" name="ddns_reverse" value="{{ v.ddns_reverse }}">
-    {% endif %}
-  </section>
+  {% include 'partials/dhcp_ddns_section.html' %}
   <section class="card form-card settings spaced">
     <h2>Lease times</h2>
     <p class="muted small page-intro">Seconds; empty uses the DHCP settings (or Kea's default: 7200 for the lease).</p>

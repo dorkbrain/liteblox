@@ -4,6 +4,9 @@ Networks nest by their prefixes alone: a network's parent is the smallest other 
 out on every read, so adding a /16 adopts the /24s inside it and deleting it hands them back up. A network with
 children is a container: it holds no addresses or ranges of its own. DHCP pools are never stored as ranges; they
 come from the DHCP subnets inside a network, so they can't drift.
+
+IPv4 and IPv6 networks live side by side (IPv4 first); each nests only within its own family. An IPv6 network has no
+map or next free: its page lists the addresses LiteBlox knows of there (view6).
 """
 
 import ipaddress
@@ -13,6 +16,7 @@ from typing import Optional
 KINDS = {'static': 'Static', 'infrastructure': 'Infrastructure', 'reserved': 'Reserved', 'other': 'Other'}
 SWEEPS = ('off', 'hourly', 'daily')
 SMALLEST = 30           # a /31 or /32 isn't a network to manage
+SMALLEST6 = 126         # nor an IPv6 /127 or /128
 
 
 class IpamError(ValueError):
@@ -27,8 +31,8 @@ class IpamError(ValueError):
 class Range:
     id: Optional[int]
     network_id: Optional[int]
-    first: ipaddress.IPv4Address
-    last: ipaddress.IPv4Address
+    first: ipaddress._BaseAddress       # IPv4Address or IPv6Address, as the network
+    last: ipaddress._BaseAddress
     kind: str = 'static'
     name: str = ''
     comment: str = ''
@@ -51,8 +55,8 @@ class Range:
 
     @classmethod
     def from_row(cls, row):
-        return cls(row['id'], row['network_id'], ipaddress.IPv4Address(row['first']),
-                   ipaddress.IPv4Address(row['last']), row['kind'], row['name'], row['comment'])
+        return cls(row['id'], row['network_id'], ipaddress.ip_address(row['first']),
+                   ipaddress.ip_address(row['last']), row['kind'], row['name'], row['comment'])
 
 
 @dataclass
@@ -70,7 +74,11 @@ class Network:
 
     @property
     def net(self):
-        return ipaddress.IPv4Network(self.prefix)
+        return ipaddress.ip_network(self.prefix)
+
+    @property
+    def version(self):
+        return self.net.version
 
     @property
     def container(self):
@@ -82,12 +90,13 @@ class Network:
 
     @property
     def usable(self):
-        """The addresses a host can have: all but the network and broadcast addresses."""
-        return max(self.net.num_addresses - 2, 0)
+        """The addresses a host can have: all but the network and broadcast addresses (IPv6: all but the first,
+        the subnet-router anycast)."""
+        return max(self.net.num_addresses - (2 if self.version == 4 else 1), 0)
 
     def hosts_range(self):
         net = self.net
-        return net.network_address + 1, net.broadcast_address - 1
+        return net.network_address + 1, net.broadcast_address - (1 if self.version == 4 else 0)
 
     @classmethod
     def from_row(cls, row):
@@ -97,7 +106,7 @@ class Network:
 
 def _key(n):
     net = n.net
-    return int(net.network_address), net.prefixlen
+    return net.version, int(net.network_address), net.prefixlen
 
 
 def networks(conn):
@@ -107,7 +116,7 @@ def networks(conn):
     by_id = {n.id: n for n in found}
     stack = []
     for n in found:
-        while stack and not n.net.subnet_of(stack[-1].net):
+        while stack and (stack[-1].version != n.version or not n.net.subnet_of(stack[-1].net)):
             stack.pop()
         if stack:
             n.parent_id, n.depth = stack[-1].id, stack[-1].depth + 1
@@ -136,7 +145,7 @@ def path(found, network):
 
 def leaf_for(found, ip):
     """The smallest network holding ip (a leaf, or a container when no child holds it), or None."""
-    ip = ipaddress.IPv4Address(str(ip))
+    ip = ipaddress.ip_address(str(ip))
     best = None
     for n in found:
         if ip in n.net and (best is None or n.net.prefixlen > best.net.prefixlen):
@@ -147,16 +156,20 @@ def leaf_for(found, ip):
 # ── changes ────────────────────────────────────────────────────────────────────
 
 def parse_prefix(text):
-    """'192.168.0.0/24' (or with host bits, '192.168.0.7/24') → IPv4Network; ValueError with a plain message."""
+    """'192.168.0.0/24' or 'fd00:1:2:100::/64' (host bits allowed) → IPv4Network or IPv6Network; ValueError with
+    a plain message."""
     text = (text or '').strip()
     if '/' not in text:
-        raise ValueError('give it as an address and a prefix length, like 192.168.0.0/24')
+        raise ValueError('give it as an address and a prefix length, like 192.168.0.0/24 or fd00:1:2:100::/64')
     try:
-        net = ipaddress.IPv4Network(text, strict=False)
+        net = ipaddress.ip_network(text, strict=False)
     except ValueError:
-        raise ValueError(f'{text} is not an IPv4 network')
-    if net.prefixlen > SMALLEST:
-        raise ValueError(f'a /{net.prefixlen} is too small to manage (the smallest is a /{SMALLEST})')
+        raise ValueError(f'{text} is not a network')
+    smallest = SMALLEST if net.version == 4 else SMALLEST6
+    if net.prefixlen > smallest:
+        raise ValueError(f'a /{net.prefixlen} is too small to manage (the smallest is a /{smallest})')
+    if net.version == 6 and (net.is_link_local or net.is_multicast or net.is_loopback):
+        raise ValueError(f'{net} is link-local, multicast or loopback: not a network to manage')
     return net
 
 
@@ -170,7 +183,7 @@ def add_network(conn, prefix, name='', comment='', sweep='off', sweep_node_id=No
     if any(n.net == net for n in found):
         errors['prefix'] = f'{net} is already in IPAM'
     else:
-        holders = [n for n in found if net.subnet_of(n.net)]
+        holders = [n for n in found if n.version == net.version and net.subnet_of(n.net)]
         parent = max(holders, key=lambda n: n.net.prefixlen) if holders else None
         if parent is not None and not parent.container and ranges(conn, parent.id):
             errors['prefix'] = (f'{parent.label} ({parent.prefix}) has ranges of its own: a network inside it would '
@@ -209,16 +222,17 @@ def ranges(conn, network_id):
 
 def dhcp_pools(network, subnets):
     """The DHCP pools inside a network, as read-only ranges (clipped to it)."""
-    from ..dhcp.leases import pool_ranges
+    from ..dhcp.leases import pool_ranges, pool_ranges6
     net, out = network.net, []
     lo, hi = net.network_address, net.broadcast_address
     for s in subnets:
         try:
-            if not ipaddress.IPv4Network(s.prefix).overlaps(net):
-                continue
+            sn = ipaddress.ip_network(s.prefix)
         except ValueError:
             continue
-        for first, last in pool_ranges(s):
+        if sn.version != net.version or not sn.overlaps(net):
+            continue
+        for first, last in (pool_ranges6 if net.version == 6 else pool_ranges)(s):
             if last < lo or first > hi:
                 continue
             out.append(Range(None, network.id, max(first, lo), min(last, hi), 'dhcp', f'DHCP pool ({s.prefix})',
@@ -231,20 +245,23 @@ def all_ranges(conn, network, subnets):
     return sorted(ranges(conn, network.id) + dhcp_pools(network, subnets), key=lambda r: int(r.first))
 
 
-def _parse_ip(text, field_name, errors):
+def _parse_ip(text, field_name, errors, version=4):
     try:
-        return ipaddress.IPv4Address((text or '').strip())
+        a = ipaddress.ip_address((text or '').strip())
     except ValueError:
-        errors[field_name] = f'{text} is not an IPv4 address' if (text or '').strip() else 'required'
+        a = None
+    if a is None or a.version != version:
+        errors[field_name] = (f'{text} is not an IPv{version} address' if (text or '').strip() else 'required')
         return None
+    return a
 
 
 def save_range(conn, network, first, last, kind='static', name='', comment='', range_id=None, subnets=()):
     """Add (range_id None) or change a range. A range lies inside the network's host addresses and overlaps
     neither another range nor a DHCP pool. Returns the range's id."""
     errors = {}
-    a = _parse_ip(first, 'first', errors)
-    b = _parse_ip(last or first, 'last', errors)
+    a = _parse_ip(first, 'first', errors, network.version)
+    b = _parse_ip(last or first, 'last', errors, network.version)
     if kind not in KINDS:
         errors['kind'] = f"one of {', '.join(KINDS)}"
     if network.container:
@@ -284,19 +301,21 @@ def delete_range(conn, network_id, range_id):
 
 def suggestions(conn, found=None, subnets=None):
     """[{prefix, source, why}]: the DHCP subnets and reverse zones that no leaf network covers yet."""
-    from ..dhcp.model import subnets as dhcp_subnets
+    from ..dhcp.model import subnets as dhcp_subnets, subnets6
     from ..search import reverse_network
     found = networks(conn) if found is None else found
     subnets = dhcp_subnets(conn) if subnets is None else subnets
     candidates = []
-    for s in subnets:
+    for s in list(subnets) + subnets6(conn):
         try:
-            candidates.append((ipaddress.IPv4Network(s.prefix), 'dhcp', s.comment or 'DHCP subnet'))
+            candidates.append((ipaddress.ip_network(s.prefix), 'dhcp',
+                               s.comment or ('DHCPv6 subnet' if s.family == 6 else 'DHCP subnet')))
         except ValueError:
             pass
-    for (name,) in conn.execute("SELECT name FROM zones WHERE name LIKE '%.in-addr.arpa' ORDER BY name"):
+    for (name,) in conn.execute("SELECT name FROM zones WHERE name LIKE '%.in-addr.arpa' OR name LIKE '%.ip6.arpa' "
+                                'ORDER BY name'):
         net = reverse_network(name)
-        if net is not None and net.prefixlen <= SMALLEST:
+        if net is not None and net.prefixlen <= (SMALLEST if net.version == 4 else SMALLEST6):
             candidates.append((net, 'zone', name))
     out, seen = [], set()
     for net, source, why in candidates:
@@ -304,11 +323,12 @@ def suggestions(conn, found=None, subnets=None):
             continue
         seen.add(net)
         # covered: the same network is in IPAM, or a leaf (not a container) already holds it
-        if any(n.net == net or (net.subnet_of(n.net) and not n.container) for n in found):
+        if any(n.net == net or (n.version == net.version and net.subnet_of(n.net) and not n.container)
+               for n in found):
             continue
         out.append({'prefix': str(net), 'source': source, 'why': why})
-    return sorted(out, key=lambda x: (int(ipaddress.IPv4Network(x['prefix']).network_address),
-                                      ipaddress.IPv4Network(x['prefix']).prefixlen))
+    from ..addrs import net_sort_key
+    return sorted(out, key=lambda x: net_sort_key(x['prefix']))
 
 
 # ── notes ──────────────────────────────────────────────────────────────────────
@@ -318,7 +338,7 @@ def notes(conn):
 
 
 def set_note(conn, ip, text, username):
-    ip = str(ipaddress.IPv4Address(str(ip)))
+    ip = str(ipaddress.ip_address(str(ip)))
     text = (text or '').strip()
     with conn:
         if text:

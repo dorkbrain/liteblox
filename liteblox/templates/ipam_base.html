@@ -12,7 +12,7 @@
     {#- collapsed: one square per network, its usage as the fill, its name in the tooltip #}
     <ul class="plain tree-mini">
       <li><a href="/ipam" class="sq glyph{% if request.url.path == '/ipam' %} on{% endif %}" title="All networks" aria-label="All networks">▦</a></li>
-      {% for n in networks %}{% set u = use[n.id] %}{% set tip = n.prefix ~ (' · ' ~ n.name if n.name else '') ~ (' · ' ~ n.children|length ~ ' network' ~ ('' if n.children|length == 1 else 's') if n.container else (' · ' ~ u[0] ~ ' of ' ~ u[1] ~ ' in use')) %}
+      {% for n in networks %}{% set u = use[n.id] %}{% set tip = n.prefix ~ (' · ' ~ n.name if n.name else '') ~ (' · ' ~ n.children|length ~ ' network' ~ ('' if n.children|length == 1 else 's') if n.container else (' · ' ~ (u[0] ~ ' known address' ~ ('' if u[0] == 1 else 'es') if u[1] is none else u[0] ~ ' of ' ~ u[1] ~ ' in use'))) %}
       <li><a href="/ipam/networks/{{ n.id }}" class="sq{% if n.container %} box{% endif %}{% if current and current.id == n.id %} on{% endif %}"{% if current and current.id == n.id %} aria-current="page"{% endif %} title="{{ tip }}" aria-label="{{ tip }}"{% if not n.container %} style="--fill: {{ (100 * u[0] / u[1])|round(1) if u[1] else 0 }}%"{% endif %}></a></li>
       {%- endfor %}
       <li class="sq-foot"><a href="/ipam/seen" class="sq glyph{% if request.url.path == '/ipam/seen' %} on{% endif %}" title="Devices seen" aria-label="Devices seen">◎</a></li>
@@ -23,7 +23,7 @@
       <li style="--depth: {{ n.depth }}"><a href="/ipam/networks/{{ n.id }}" class="tree-node{% if current and current.id == n.id %} on{% endif %}"{% if current and current.id == n.id %} aria-current="page"{% endif %}>
         {%- if n.container %}<strong>{{ n.label }}</strong>{% else %}{{ n.label }}{% endif %}
         <small class="muted">{% if n.name %}{{ n.prefix }}{% endif %}{% if n.container %}{% if n.name %} · {% endif %}{{ n.children|length }} network{{ '' if n.children|length == 1 else 's' }}{% endif %}</small>
-        {%- if not n.container %}<span class="mini-bar" title="{{ u[0] }} of {{ u[1] }} addresses in use"><i style="width: {{ (100 * u[0] / u[1])|round(1) if u[1] else 0 }}%"></i></span>{% endif %}</a></li>
+        {%- if not n.container %}<span class="mini-bar" title="{{ u[0] ~ ' known addresses' if u[1] is none else u[0] ~ ' of ' ~ u[1] ~ ' addresses in use' }}"><i style="width: {{ (100 * u[0] / u[1])|round(1) if u[1] else 0 }}%"></i></span>{% endif %}</a></li>
     {%- endfor %}</ul>
     {% else %}<p class="muted small">None yet.</p>{% endif %}
     {% if suggestions and user.is_admin %}

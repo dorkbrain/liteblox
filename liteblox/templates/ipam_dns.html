@@ -3,7 +3,7 @@
 {% block title %}Add DNS · {{ ip }} · IPAM · LiteBlox{% endblock %}
 {% block ipam %}
 <h1><a href="/ipam">IPAM</a>{% if network %} · <a href="/ipam/networks/{{ network.id }}?ip={{ ip }}">{{ network.label }}</a>{% endif %} · <code>{{ ip }}</code></h1>
-<p class="page-intro muted">Add an A record for this address to a zone{% if reverse %}, and its PTR to {{ reverse }}{% endif %}, the same as adding it on the zone's page.
+<p class="page-intro muted">Add an {{ rtype or "A" }} record for this address to a zone{% if reverse %}, and its PTR to {{ reverse }}{% endif %}, the same as adding it on the zone's page.
   <a href="/help/ipam#add-dns">More in Help</a>.</p>
 {% if names %}<p class="notice small">Already in DNS as {% for h in names %}<code>{{ h.rec.fqdn }}</code> ({{ h.zone }}){% if not loop.last %}, {% endif %}{% endfor %}: this adds another name.</p>{% endif %}
 <form method="post" action="/ipam/dns/{{ ip }}" class="settings card form-card"
@@ -29,7 +29,7 @@
     <label class="setting-name" for="comment">Comment</label>
     <div class="setting-control"><input id="comment" name="comment" value="{{ form.comment }}" maxlength="200">
       {% if errors.comment %}<span class="error-text small">{{ errors.comment }}</span>{% endif %}
-      <span class="muted small">Saved on the A record.</span></div>
+      <span class="muted small">Saved on the {{ rtype or "A" }} record.</span></div>
   </div>
   <div class="setting">
     <span class="setting-name">PTR</span>

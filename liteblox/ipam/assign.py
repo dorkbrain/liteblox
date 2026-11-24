@@ -20,6 +20,9 @@ def _ips(values):
         try:
             ip = str(ipaddress.IPv4Address(str(v).strip()))
         except ValueError:
+            if ':' in str(v):
+                raise FreeError(f'{v}: assign takes IPv4 addresses. Name an IPv6 address with Add DNS (an AAAA '
+                                'record), a DHCPv6 reservation, or an IPAM name')
             raise FreeError(f'{v} is not an IPv4 address')
         if ip in out:
             raise FreeError(f'{ip} is given twice')

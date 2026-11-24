@@ -60,6 +60,12 @@ def named(args):
 def named_checkconf(args):
     conf = Path(args[-1]) if args and not args[-1].startswith('-') else NAMED_CONF
     files = conf_files(conf)
+    for p in files:     # as named-checkconf: an include of a file that isn't there fails the whole config
+        for n, line in enumerate(p.read_text().splitlines(), 1):
+            m = re.match(r'\s*include\s+"([^"]+)"\s*;', line)
+            if m and not Path(m.group(1)).exists():
+                print(f'{p}:{n}: parsing failed: file not found', file=sys.stderr)
+                return 1
     bad = [p for p in files if 'BROKEN' in p.read_text()]
     if bad:
         print(f'{bad[0]}:1: unknown option BROKEN', file=sys.stderr)

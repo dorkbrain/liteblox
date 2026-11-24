@@ -85,8 +85,8 @@ LOOKUP = lookup         # tests put a fake resolver here
 
 
 def cached(conn):
-    """{IPv4Address: {name, looked_up_at, error}}."""
-    return {ipaddress.IPv4Address(r['ip']): dict(r) for r in conn.execute('SELECT * FROM ipam_ptr')}
+    """{IPv4Address or IPv6Address: {name, looked_up_at, error}}."""
+    return {ipaddress.ip_address(r['ip']): dict(r) for r in conn.execute('SELECT * FROM ipam_ptr')}
 
 
 def get(conn, ip):

@@ -200,7 +200,8 @@ def test_status_reports_kea_and_interfaces(kea_client, kea_root, layout):
     assert kea['services']['dhcp4'] == {'running': True, 'pid': 4242, 'uptime': 60, 'reload': 30}
     assert kea['files']['kea-dhcp4.conf'] and kea['files']['kea-dhcp-ddns.conf']
     assert status['interfaces'] == [{'name': 'ens18', 'up': True, 'addresses': ['192.0.2.53/24']},
-                                    {'name': 'ens19', 'up': True, 'addresses': ['198.51.100.53/24']}]
+                                    {'name': 'ens19', 'up': True, 'addresses': ['198.51.100.53/24', 'fd00:1:2:100::53/64',
+                                                                                'fe80::53/64']}]
     kea_root[1]['d2'].close()
     assert client.status()['kea']['services']['d2']['running'] is False
 

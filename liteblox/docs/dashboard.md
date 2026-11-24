@@ -12,7 +12,7 @@ Until a node is set up, taken over and has a primary and zones, the Dashboard li
 |---|---|---|
 | **Nodes** | nodes ready out of all of them, and which is the primary | a node doesn't answer, isn't set up, has a stale backup or an agent certificate close to expiry |
 | **DNS zones** | how many zones, and unpublished drafts | a publish failed, a node's BIND config changed outside LiteBlox, a demotion is pending or left reports, a [reclaim pass held back](/help/dynamic#reclaiming-them-on-a-schedule), or there's no primary |
-| **DHCP leases** | active leases, how many of the pools' addresses are taken (leased or declined), the failover pair's state | the pair isn't hot-standby, Kea isn't running or listening on a node, a Kea config changed on a node, or a subnet's DNS key lacks grants |
+| **DHCP leases** | active leases (DHCPv4 and DHCPv6), how many of the DHCPv4 pools' addresses are taken (leased or declined), the failover pair's state | the pair isn't hot-standby, Kea isn't running or listening on a node, a Kea config changed on a node, or a subnet's DNS key lacks grants |
 | **Time** | how many nodes chrony keeps in sync, and the largest offset | chrony isn't running or has no source, or a clock is 30 s or more from LiteBlox's |
 | **Attention** | how many problems need you | any of the above |
 
@@ -30,7 +30,7 @@ One row per node (hover over its name for its address):
 
 - **Role**: a pill for each service it runs: **DNS**, **DHCP**, **NTP**, and **IPAM** on a node that IPAM sweeps and checks a network from (the one picked for the network, else the first node on it). A node running none of them shows *agent only*.
 - **DNS**: its role, **primary** or **secondary** (hover for how many zones it holds), or *not taken over* yet.
-- **DHCP**: its role in the failover pair, **primary** or **standby**, or **serving** when it runs alone. While all is well the pill is green, or plain for the standby (as for a DNS secondary). It turns amber for a pair in *partner-down* or Kea still trying to listen, and red for *terminated* or Kea not running; hover for the state.
+- **DHCP**: its role in the failover pair, **primary** or **standby**, or **serving** when it runs alone. While all is well the pill is green, or plain for the standby (as for a DNS secondary). It turns amber for a pair in *partner-down* or Kea still trying to listen, and red for *terminated* or Kea not running; hover for the state. An amber **RA on** pill beside it means the node is sending [router advertisements](/help/ipv6#router-advertisements-from-liteblox).
 
 The other columns are its status, its time offset (chrony's, or its clock's distance from LiteBlox's when LiteBlox doesn't run chrony there), its last good backup, and its agent version. A node that doesn't answer shows dashes rather than what it last reported (its DHCP pill goes grey, *unknown*), and the tiles leave it out. **upgrade** means this LiteBlox carries a newer agent: **Upgrade agent** on the node's page installs it ([Upgrading an agent](/help/install#upgrading-an-agent)).
 
@@ -39,6 +39,8 @@ The last columns are the node's load average, memory and disk use (of `/`), and 
 ## DHCP pools
 
 For each subnet: how many of its pool addresses are taken (leased, or *declined*: a client said the address was already in use, so Kea holds it back for a while), as a bar (amber from 80 %, red from 95 %), active leases outside the pools (reserved addresses outside them, usually), the number of reservations, and a graph of active leases over the last day. The figures come from the health check, which reads the leases from the failover primary each minute, or from the standby when the primary doesn't answer. If neither answers, it records nothing rather than a false zero.
+
+An IPv6 subnet's row counts its active address leases against its pools the same way; a /64's pool is so large that the bar mostly stays empty, so the leases and the graph are what to watch. It's left out of the tile's pool figure for the same reason.
 
 ## Recent activity
 

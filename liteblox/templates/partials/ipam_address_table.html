@@ -1,0 +1,53 @@
+{#- An IPAM network's address table (view.row rows), for ipam_network.html and ipam_network6.html, included with
+their context: rows, base, page, used_only, highlight, add_dns, probe_nodes, record_link, resolver, now. #}
+<div class="table-wrap"><table class="addresses ipam-table">
+  <thead><tr>{% for key, label in [('ip', 'IP'), ('state', 'State'), ('name', 'Names'), ('mac', 'MAC'), ('lease', 'Last seen')] %}<th{% if key == 'ip' %} aria-sort="ascending"{% endif %}><button type="button" class="sort" data-sort="{{ key }}">{{ label }}</button></th>{% endfor %}<th>DHCP</th><th>Range</th><th>Comment</th><th>Checks</th>{% if user.is_admin %}<th></th>{% endif %}</tr></thead>
+  <tbody>{% for a in rows %}{% set l = a.lease %}{% set r = a.reservation %}
+  <tr id="ip-{{ a.ip }}" class="{{ 'free' if a.state == 'free' }}{{ ' focus' if highlight and a.ip == highlight }}{{ ' flap' if a.flapping }}"
+      data-search="{{ (a.ip ~ ' ' ~ a.mac ~ ' ' ~ a.vendor ~ ' ' ~ a.hostname ~ ' ' ~ a.label ~ ' ' ~ a.comment ~ ' ' ~ (a.names|map(attribute='rec.fqdn')|join(' ')) ~ ' ' ~ (a.ipam.name if a.ipam else '') ~ ' ' ~ a.rdns_name ~ ' ' ~ (a.range.label if a.range else ''))|lower }}"
+      data-order="{{ loop.index0 }}" data-mac="{{ a.mac|lower }}" data-name="{{ (a.names[0].rec.fqdn if a.names else a.ipam.name if a.ipam else a.hostname or a.rdns_name)|lower }}" data-state="{{ a.label }}"
+      data-lease="{{ now - a.seen.last_seen if a.seen else '' }}">
+    <td><code>{{ a.ip }}</code></td>
+    <td>{% if a.kind != 'host' %}<span class="muted small">{{ a.kind }}</span>{% else %}<span class="pill s-{{ a.state }}">{{ a.label }}</span>{% endif %}</td>
+    <td>{% for h in a.names %}<a href="{{ record_link(h) }}"><code>{{ h.rec.fqdn }}</code></a>{% if h.dynamic %} <span class="muted small">dynamic</span>{% endif %}{% if not loop.last %}<br>{% endif %}{% endfor %}
+      {%- if a.ipam %}{% if a.names %}<br>{% endif %}<code>{{ a.ipam.name }}</code> <span class="muted small">IPAM</span>{% endif %}
+      {%- if not a.names and not a.ipam and a.hostname %}<code>{{ a.hostname }}</code> <span class="muted small">DHCP</span>{% endif %}
+      {%- if not a.names and a.ptrs %}{% for h in a.ptrs %}<span class="muted small">PTR</span> <code>{{ h.rec.target }}</code>{% endfor %}{% endif %}
+      {%- if a.rdns_name %}{% if a.names or a.ipam or a.hostname or a.ptrs %}<br>{% endif %}<code>{{ a.rdns_name }}</code> <span class="muted small" title="its PTR at {{ resolver }}, looked up {{ a.rdns.looked_up_at|ago }}">rDNS</span>{% endif %}</td>
+    <td>{% if a.mac %}<a href="/ipam/devices/{{ a.mac|urlencode }}"><code>{{ a.mac }}</code></a>{% if a.vendor %}<div class="muted small">{{ a.vendor }}</div>{% endif %}{% endif %}
+      {%- if a.seen and a.seen.macs > 1 %}<div class="small"><a href="/search?q={{ a.ip }}#address">{{ a.seen.macs }} MACs seen</a></div>{% endif %}</td>
+    <td class="nowrap small">{% if a.seen %}{{ a.seen.last_seen|reltime }}{% if a.flapping %} <span class="pill warn">flapping</span>{% endif %}{% endif %}</td>
+    <td class="nowrap small">
+      {%- if r %}<a href="/dhcp/{{ 'v6/' if r.duid is defined }}subnets/{{ r.subnet_id }}/reservations/{{ r.id }}">reserved</a>{% if l %} · online{% endif %}
+      {%- elif l %}<span title="{{ l.expires|localtime }}">lease{% if l.expires_in > 0 %}, ends in {{ l.expires_in|duration }}{% endif %}</span>
+      {%- elif a.in_pool %}<span class="muted">pool</span>{% endif %}</td>
+    <td class="small">{% if a.range %}{{ a.range.label }}{% endif %}</td>
+    <td class="small comment-cell" x-data="{ edit: false }">
+      {%- set w = a.comment_from %}
+      <span x-show="!edit">{{ a.comment }}{% if a.comment %}<span class="muted block">{% if w.kind == 'dns' %}{{ 'A' if a.ip.version == 4 else 'AAAA' }} record in {{ w.zone }}{% elif w.kind == 'reservation' %}reservation{% elif w.kind == 'ipam' %}IPAM record{% else %}IPAM note{% endif %}</span>{% endif %}</span>
+      {%- if user.is_admin and a.kind == 'host' %}
+      <button type="button" class="link small" x-show="!edit" @click="edit = true; $nextTick(() => $refs.c.focus())" title="{% if w.kind == 'dns' %}saved on the {{ 'A' if a.ip.version == 4 else 'AAAA' }} record {{ w.fqdn }} in {{ w.zone }} (a draft){% elif w.kind == 'reservation' %}saved on the DHCP reservation{% elif w.kind == 'ipam' %}saved on the IPAM record{% else %}saved as an IPAM note{% endif %}">Edit</button>
+      <form method="post" action="/ipam/comment" x-show="edit" x-cloak class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="ip" value="{{ a.ip }}">
+        <input type="hidden" name="kind" value="{{ w.kind }}"><input type="hidden" name="back" value="{{ base }}?page={{ page }}{{ '&used=1' if used_only }}">
+        {% if w.kind == 'dns' %}<input type="hidden" name="zone" value="{{ w.zone }}"><input type="hidden" name="fqdn" value="{{ w.fqdn }}">{% elif w.kind == 'reservation' %}<input type="hidden" name="id" value="{{ w.id }}">{% endif %}
+        <input name="comment" value="{{ a.comment }}" x-ref="c" @keydown.escape="edit = false; $refs.c.value = $refs.c.defaultValue" aria-label="Comment for {{ a.ip }}">
+        <button type="submit" class="small">Save</button>
+        <button type="button" class="secondary small" @click="edit = false; $refs.c.value = $refs.c.defaultValue">Cancel</button>
+      </form>{% endif %}</td>
+    <td class="small">{% for level, text, link in a.checks %}<div class="check-{{ level }}">{% if link %}<a href="{{ link }}">{{ text }}</a>{% else %}{{ text }}{% endif %}</div>{% endfor %}</td>
+    {% if user.is_admin %}<td class="actions small">{% if a.kind == 'host' %}
+      <a href="/search?q={{ a.ip }}">Card</a>
+      {%- set name_back = base ~ '?ip=' ~ a.ip %}
+      {%- if (a.names or r or a.ipam) and a.ip.version == 4 %} · <a href="/addresses/{{ a.ip }}/move?back={{ name_back|urlencode }}" title="give its names, PTR, reservation and IPAM entry a new address">Move…</a>{% endif %}
+      {%- if a.ipam %} · <a href="/ipam/names/{{ a.ip }}?back={{ name_back|urlencode }}">Name</a>
+      {%- elif a.nameable and not a.names and not r %} · <a href="/ipam/names/{{ a.ip }}?back={{ name_back|urlencode }}" title="a name kept in IPAM only">Name…</a>{% endif %}
+      {%- if add_dns and not a.names %} · <a href="/ipam/dns/{{ a.ip }}?back={{ name_back|urlencode }}" title="an {{ 'A' if a.ip.version == 4 else 'AAAA' }} record (and its PTR) in a zone you pick">Add DNS…</a>{% endif %}
+      {%- if a.state == 'free' %}
+      {%- if a.subnet %} · <a href="{{ a.subnet.url }}/reservations/new?ip={{ a.ip }}">Reserve…</a>{% endif %}
+      {%- if probe_nodes %} · <button type="button" class="link small" hx-post="/ipam/check" hx-vals='{"ip": "{{ a.ip }}"}' hx-swap="outerHTML" title="ping it once and read the node's neighbour table">Check</button>{% endif %}
+      {%- elif l and not r and a.subnet %} · <a href="{{ a.subnet.url }}/reservations/new?{{ ('duid=' ~ l.duid|urlencode) if l.duid else ('mac=' ~ l.mac|urlencode) }}&ip={{ a.ip }}&hostname={{ l.hostname|urlencode }}">Reserve</a>
+      {%- endif %}
+      {%- if a.ip.version == 6 and a.state != 'free' and probe_nodes %} · <button type="button" class="link small" hx-post="/ipam/check" hx-vals='{"ip": "{{ a.ip }}"}' hx-swap="outerHTML" title="ping it once and read the node's neighbour table (NDP)">Check</button>{% endif %}{% endif %}</td>{% endif %}
+  </tr>{% endfor %}</tbody>
+</table></div>

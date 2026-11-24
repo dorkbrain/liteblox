@@ -61,7 +61,10 @@ def _node_rows(conn, settings, nodes, now, on):
         sockets = json.loads(n['dhcp_sockets']) if n['dhcp_sockets'] and not down else None
         ha_state = None if down else n['dhcp_ha_state']
         dhcp_role = (pair.role_of(n['id']) if pair.active else None) if n['dhcp'] else None
+        radvd = json.loads(n['radvd_state']) if n['radvd_state'] and not down else None
         rows.append({
+            # router advertisements going out from this node (radvd running on an interface LiteBlox set)
+            'ra': radvd['interfaces'] if radvd and radvd.get('active') and radvd.get('interfaces') else None,
             'node': n, 'zones': zones.get(n['id'], 0), 'ntp': ntp, 'down': down,
             'ha_state': ha_state, 'skew': None if down else n['clock_skew'], 'sockets': sockets, 'dhcp_role': dhcp_role,
             'dhcp': _dhcp_pill(n, down, sockets, ha_state, dhcp_role) if n['dhcp'] else None,
@@ -97,6 +100,18 @@ def _pools(conn, now):
                     'pct': 100.0 * in_pool / size if size and in_pool is not None else None,
                     'reserved': len(s.reservations),
                     'spark': stats.spark(stats.series(conn, 'leases_active', subnet_id=s.id, hours=SPARK_HOURS,
+                                                      now=now), hours=SPARK_HOURS, now=now)})
+    from .dhcp.leases import pool_size6
+    from .dhcp.model import subnets6
+    for s in subnets6(conn):        # DHCPv6: no 'outside' count, and the leases' href under /dhcp/v6
+        active = stats.latest(conn, 'leases6_active', subnet6_id=s.id, now=now)
+        in_pool = stats.latest(conn, 'leases6_in_pool', subnet6_id=s.id, now=now)
+        size = pool_size6(s)
+        out.append({'subnet': s, 'size': size, 'active': active, 'in_pool': in_pool, 'served': s.interface in served,
+                    'outside': None, 'v6': True, 'link': f'/dhcp/v6/subnets/{s.id}',
+                    'pct': 100.0 * in_pool / size if size and in_pool is not None else None,
+                    'reserved': len(s.reservations),
+                    'spark': stats.spark(stats.series(conn, 'leases6_active', subnet6_id=s.id, hours=SPARK_HOURS,
                                                       now=now), hours=SPARK_HOURS, now=now)})
     return out
 
@@ -184,7 +199,7 @@ def overview(conn, settings, now=None):
                       'sub': f"{drafts} unpublished draft{'' if drafts == 1 else 's'}" if drafts else 'all published'})
     if on['dhcp'] and any(n['dhcp'] for n in nodes):
         known = [p for p in pools if p['active'] is not None]
-        counted = [p for p in pools if p['in_pool'] is not None]
+        counted = [p for p in pools if p['in_pool'] is not None and not p.get('v6')]    # a v6 pool's size swamps it
         sub = (f"{sum(p['in_pool'] for p in counted):.0f} of {sum(p['size'] for p in counted)} in the pools"
                if counted else 'no lease counts yet' if any(p['served'] for p in pools) else 'no subnet served yet')
         if pair.active:

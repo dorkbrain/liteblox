@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
+from ..addrs import sort_key
 from ..db import audit, get_db
 from ..ipam import model
 from ..ipam.free import FreeError
@@ -44,12 +45,24 @@ def _range(r):
             'kind': 'dhcp' if r.dhcp else r.kind, 'name': r.name, 'comment': r.comment, 'dhcp_subnet': r.subnet_id}
 
 
-def _network(n, facts=None):
+def _network(n, facts=None, known6=()):
+    """facts: IPv4's (view.gather); known6: every IPv6 address IPAM knows of (an IPv6 network's used = those in it)."""
     from ..ipam import view
+    used = None
+    if facts is not None and not n.container:
+        used = sum(1 for a in known6 if a in n.net) if n.version == 6 else view.usage(facts, n)[0]
     return {'id': n.id, 'prefix': n.prefix, 'name': n.name, 'comment': n.comment, 'sweep': n.sweep,
             'swept_at': n.swept_at, 'parent': n.parent_id, 'container': n.container,
-            'children': [c.id for c in n.children], 'usable': n.usable,
-            'used': view.usage(facts, n)[0] if facts is not None and not n.container else None}
+            'children': [c.id for c in n.children], 'usable': n.usable, 'used': used}
+
+
+def _known6(request, conn, found):
+    """Every IPv6 address IPAM knows of, when there's an IPv6 network to count them for."""
+    from ..ipam import view6
+    if not any(n.version == 6 and not n.container for n in found):
+        return []
+    facts6, _ = view6.gather(conn, _settings(request))
+    return view6.known(facts6, model.Network(None, '::/0'), model.notes(conn))
 
 
 def _get_network(conn, network_id):
@@ -65,16 +78,20 @@ def networks_list(request: Request, user: ApiUser = Depends(api_user), conn=Depe
     """Every network, its parent and children (worked out from the prefixes) and how many addresses are used."""
     from ..ipam import view
     facts = view.gather(conn, _settings(request))
-    return [_network(n, facts) for n in model.networks(conn)]
+    found = model.networks(conn)
+    known6 = _known6(request, conn, found)
+    return [_network(n, facts, known6) for n in found]
 
 
 @router.get('/networks/{network_id}', response_model=models.IpamNetworkDetail, summary='Get a network')
 def network_get(request: Request, network_id: int, user: ApiUser = Depends(api_user), conn=Depends(get_db)):
     from ..ipam import view
+    from ..dhcp.model import subnets6
     n = _get_network(conn, network_id)
     facts = view.gather(conn, _settings(request))
-    out = _network(n, facts)
-    out['ranges'] = [] if n.container else [_range(r) for r in model.all_ranges(conn, n, facts.subnets)]
+    out = _network(n, facts, _known6(request, conn, [n]))
+    dhcp = subnets6(conn) if n.version == 6 else facts.subnets
+    out['ranges'] = [] if n.container else [_range(r) for r in model.all_ranges(conn, n, dhcp)]
     return out
 
 
@@ -173,9 +190,18 @@ def addresses(request: Request, network_id: int, page: int = Query(0, ge=0, desc
               used_only: bool = Query(False, description='leave the free addresses out'),
               user: ApiUser = Depends(api_user), conn=Depends(get_db)):
     """The network page's table: every address (or the used ones) of one /24 page, with its state, names, MAC,
-    comment and checks."""
-    from ..ipam import view
+    comment and checks. An IPv6 network has one page: the addresses LiteBlox knows of there."""
+    from ..ipam import view, view6
     n = _leaf(conn, network_id)
+    if n.version == 6:
+        from ..dhcp.model import subnets6
+        if page:
+            raise HTTPException(status_code=404, detail=f'{n.prefix} has 1 page')
+        facts, _ = view6.gather(conn, _settings(request), n)
+        rows = view6.rows(facts, n, model.all_ranges(conn, n, subnets6(conn)), model.notes(conn))
+        return {'network': n.prefix, 'page': 0, 'pages': 1,
+                'items': [{**view.item(a), 'last_seen': _iso(a['seen']['last_seen']) if a['seen'] else None}
+                          for a in rows]}
     if page >= view.pages(n):
         raise HTTPException(status_code=404, detail=f'{n.prefix} has {view.pages(n)} pages')
     facts = view.gather(conn, _settings(request))
@@ -205,10 +231,10 @@ def seen_list(request: Request, network: str = Query(None, description='only ins
     rows = conn.execute(sql + ' ORDER BY s.last_seen DESC', args).fetchall()
     if network:
         try:
-            net = ipaddress.IPv4Network(network, strict=False)
+            net = ipaddress.ip_network(network, strict=False)
         except ValueError:
-            raise HTTPException(status_code=422, detail=f'{network} is not an IPv4 network')
-        rows = [r for r in rows if ipaddress.IPv4Address(r['ip']) in net]
+            raise HTTPException(status_code=422, detail=f'{network} is not a network')
+        rows = [r for r in rows if ipaddress.ip_address(r['ip']) in net]
     from ..ipam.devices import repeaters
     behind = repeaters(conn)
     return [_seen_row(r, _settings(request), behind) for r in rows]
@@ -216,9 +242,9 @@ def seen_list(request: Request, network: str = Query(None, description='only ins
 
 def _ip(ip):
     try:
-        return str(ipaddress.IPv4Address(ip.strip()))
+        return str(ipaddress.ip_address(ip.strip()))
     except ValueError:
-        raise HTTPException(status_code=422, detail=f'{ip} is not an IPv4 address')
+        raise HTTPException(status_code=422, detail=f'{ip} is not an IP address')
 
 
 @router.delete('/seen/{ip}', status_code=204, summary='Forget what was seen on an address')
@@ -317,11 +343,11 @@ def names_list(network: str = Query(None, description='only inside this prefix')
     found = names.records(conn)
     if network:
         try:
-            net = ipaddress.IPv4Network(network, strict=False)
+            net = ipaddress.ip_network(network, strict=False)
         except ValueError:
-            raise HTTPException(status_code=422, detail=f'{network} is not an IPv4 network')
+            raise HTTPException(status_code=422, detail=f'{network} is not a network')
         found = {ip: r for ip, r in found.items() if ip in net}
-    return [_name(r) for _, r in sorted(found.items())]
+    return [_name(r) for _, r in sorted(found.items(), key=lambda kv: sort_key(kv[0]))]
 
 
 @router.get('/names/{ip}', response_model=models.IpamName, summary="Get an address's IPAM name")

@@ -11,8 +11,9 @@
   <section class="card">
     <h2><a href="/ipam/networks/{{ n.id }}">{{ n.label }}</a></h2>
     <p class="small muted"><code>{{ n.prefix }}</code>{% if n.container %} · {{ n.children|length }} network{{ '' if n.children|length == 1 else 's' }}{% endif %}{% if n.comment %} · {{ n.comment }}{% endif %}</p>
-    {{ meter(100 * u[0] / u[1] if u[1] else 0, u[0] ~ ' of ' ~ u[1] ~ (' addresses in its networks' if n.container else ' addresses in use')) }}
-    <p class="small">{{ u[0] }} of {{ u[1] }} {{ 'addresses in networks' if n.container else 'in use' }}</p>
+    {% if u[1] is none %}<p class="small">{{ u[0] }} known address{{ '' if u[0] == 1 else 'es' }} <span class="muted">(IPv6: no share of the network to show)</span></p>
+    {% else %}{{ meter(100 * u[0] / u[1] if u[1] else 0, u[0] ~ ' of ' ~ u[1] ~ ((' ' ~ u[2] ~ ' in its networks') if n.container else ' addresses in use')) }}
+    <p class="small">{{ u[0] }} of {{ u[1] }} {{ (u[2] ~ ' in networks') if n.container else 'in use' }}</p>{% endif %}
     {% if n.container %}<ul class="plain small">{% for c in n.children %}<li><a href="/ipam/networks/{{ c.id }}">{{ c.label }}</a>{% if c.name %} <span class="muted">{{ c.prefix }}</span>{% endif %}</li>{% endfor %}</ul>{% endif %}
   </section>
   {% endfor %}
@@ -26,11 +27,11 @@
   <form method="post" action="/ipam/networks" class="stack">
     <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
     <div class="row">
-      <label>Network <input name="prefix" value="{{ form.prefix or '' }}" placeholder="192.168.10.0/24" required{% if form_errors.prefix %} aria-invalid="true"{% endif %}>{% if form_errors.prefix %}<span class="error-text small">{{ form_errors.prefix }}</span>{% endif %}</label>
+      <label>Network <input name="prefix" value="{{ form.prefix or '' }}" placeholder="192.168.10.0/24 or fd00:1:2:100::/64" required{% if form_errors.prefix %} aria-invalid="true"{% endif %}>{% if form_errors.prefix %}<span class="error-text small">{{ form_errors.prefix }}</span>{% endif %}</label>
       <label>Name <input name="name" value="{{ form.name or '' }}" placeholder="IoT, Home (a site)"></label>
     </div>
     <label>Comment <input name="comment" value="{{ form.comment or '' }}"></label>
-    {% call action_bar(note='A /16 holding /24s you add becomes their container.') %}<button type="submit">Add network</button>{% endcall %}
+    {% call action_bar(note='A /16 holding /24s you add becomes their container (a /48 holding /64s, for IPv6).') %}<button type="submit">Add network</button>{% endcall %}
   </form>
 </section>
 {% endif %}

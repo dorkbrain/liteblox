@@ -393,39 +393,50 @@ def zone_page(request: Request, name: str, user: User = Depends(current_user), c
 
 def _stale_view(conn, ctx):
     """The zone's DHCP names and which are stale, for its page (?stale=1)."""
-    from ..dhcp import leases as lease_mod
     from . import reclaim
-    found, errors = lease_mod.serving_leases(ctx.settings, conn)
+    found, errors = reclaim.all_leases(ctx.settings, conn)
     trouble = errors[0] if errors else reclaim.dhcp_trouble(conn)
     # looking starts a name's clock too, so a zone that isn't reclaimed on a schedule still learns its names' age
     items = reclaim.review(conn, ctx.settings, ctx.row, ctx.zone, found, notice=not trouble)
+    ptrs, _ = reclaim.review_ptrs(ctx.settings, conn, ctx.row, ctx.zone, found, notice=not trouble)
     if trouble:                     # without trustworthy leases, nothing is called stale
-        for i in items:
+        for i in items + ptrs:
             if i['stale']:
                 i['stale'], i['why'] = False, f"can't tell: {trouble}"
     return {'names': items, 'stale': [i for i in items if i['stale']], 'trouble': trouble,
+            'ptrs': ptrs, 'stale_ptrs': [i for i in ptrs if i['stale']],
             'grace': reclaim.grace(conn, ctx.row), 'default': reclaim.grace_default(conn, ctx.row)}
 
 
 @router.post('/zones/{name}/stale')
 async def stale_delete(request: Request, name: str, user: User = Depends(require_admin), conn=Depends(get_db)):
-    """Delete the DHCP names ticked in the zone's stale view (their A, DHCID and PTR)."""
+    """Delete the DHCP names ticked in the zone's stale view (their A, AAAA, DHCID and PTR), and the stale PTRs."""
     from . import reclaim
     ctx = Ctx(request, conn, name)
     form = await request.form()
-    names = form.getlist('names')
-    if not ctx.dynamic or not names:
+    names, owners = form.getlist('names'), form.getlist('ptrs')
+    if not ctx.dynamic or not (names or owners):
         return RedirectResponse(f'/zones/{name}?stale=1#stale', status_code=303)
-    lines = reclaim.delete(ctx.settings, conn, name, names, user.username)
+    lines = reclaim.delete(ctx.settings, conn, name, names, user.username) if names else []
+    stale_lines = reclaim.delete_ptrs(ctx.settings, conn, name, owners, user.username) if owners else []
     with conn:
         conn.executemany('DELETE FROM ddns_names WHERE name = ?', [(n.rstrip('.').lower(),) for n in names])
         # what a held-back pass asked you to look at is dealt with: Needs attention drops it
         conn.execute('UPDATE zones SET reclaim_note = NULL WHERE id = ?', (ctx.row['id'],))
-    audit(conn, user.username, 'ddns_delete', f'{name}: ' + ', '.join(names))
+    if names or stale_lines:        # a PTR whose name got its address back (or that went already) stays: not logged
+        audit(conn, user.username, 'ddns_delete', f'{name}: ' + ', '.join(
+            names + [line.removeprefix('removed ') for line in stale_lines]))
     removed = sum(1 for line in lines if line.startswith('removed ') and ' PTR ' not in line)
     ptrs = sum(1 for line in lines if 'the PTR for' in line)
-    done = f"{removed} name{'' if removed == 1 else 's'} removed" + (
-        f", with {ptrs} PTR record{'' if ptrs == 1 else 's'}" if ptrs else '')
+    parts = []
+    if names:
+        parts.append(f"{removed} name{'' if removed == 1 else 's'} removed" + (
+            f", with {ptrs} PTR record{'' if ptrs == 1 else 's'}" if ptrs else ''))
+    if owners and stale_lines:
+        parts.append(f"{len(stale_lines)} stale PTR record{'' if len(stale_lines) == 1 else 's'} removed")
+    elif owners:
+        parts.append('no PTR record removed: its name has that address again, or it was gone already')
+    done = '; '.join(parts)
     return RedirectResponse(f'/zones/{name}?stale=1&done={quote(done)}#stale', status_code=303)
 
 

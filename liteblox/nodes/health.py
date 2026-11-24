@@ -76,9 +76,13 @@ def _sample(settings, conn, node):
 def _neighbours(settings, conn, node):
     """What the node sees on its networks, for IPAM (an agent older than 3.4 has no /neigh: nothing to read)."""
     from ..ipam import seen
+    v6 = any(':' in n for n in json.loads(node['networks'] or '[]'))     # an IPv6 network of its own: NDP too
     try:
         with nodes.agent_client(settings, node, timeout=10.0) as c:
             entries = c.neigh()
+            if v6:
+                # an agent before 6.0 ignores the family and answers with its IPv4 table again: keep only IPv6
+                entries += [e for e in c.neigh(family=6) if ':' in (e.get('ip') or '')]
     except AgentError:
         return
     seen.record(conn, node['id'], entries)
@@ -94,6 +98,14 @@ def _sample_leases(settings, conn):
     if not errors:                  # each name's newest lease expiry, for stale DHCP names
         from ..dns import reclaim
         reclaim.remember(conn, found)
+    from ..dhcp.model import has_dhcp6
+    if conn.execute('SELECT 1 FROM dhcp6_subnets LIMIT 1').fetchone() and any(has_dhcp6(n) for n in leases.serving(conn)):
+        found6, errors6 = leases.serving_leases(settings, conn, family=6)
+        if found6 or not errors6:
+            stats.sample_leases6(conn, leases.pool_use6(conn, found6))
+        if not errors6:
+            from ..dns import reclaim
+            reclaim.remember(conn, [(n, x) for n, x in found6 if x.get('type') == 'address'])
 
 
 def _dhcp_tried_recently(conn, node_id):
@@ -108,7 +120,8 @@ def _interfaces_down(conn, node, status):
     up = {i['name'] for i in (status or {}).get('interfaces') or [] if i.get('up')}
     if not (status or {}).get('interfaces'):
         return []                   # an agent that doesn't say: try the reload
-    return [i for i in for_node(conn, nodes.get_node(conn, node['id'])).interfaces if i not in up]
+    config = for_node(conn, nodes.get_node(conn, node['id']))
+    return [i for i in dict.fromkeys(config.interfaces + config.interfaces6) if i not in up]
 
 
 def start_reconcile(settings, node, background=True):
@@ -118,13 +131,14 @@ def start_reconcile(settings, node, background=True):
                       node_id=node['id'], username='liteblox', background=background)
 
 
-def listening(dhcp4):
-    """None when kea-dhcp4 answers and listens on all its interfaces; else {status, errors}: 'down' (it doesn't
-    answer), or status-get's 'retrying' / 'failed' (an interface it can't open, e.g. not up yet at boot)."""
+def listening(dhcp4, daemon='kea-dhcp4'):
+    """None when kea-dhcp4 (or kea-dhcp6) answers and listens on all its interfaces; else {status, errors}: 'down'
+    (it doesn't answer), or status-get's 'retrying' / 'failed' (an interface it can't open, e.g. not up yet at
+    boot)."""
     if not dhcp4:
         return None
     if not dhcp4.get('running'):
-        return {'status': 'down', 'errors': [dhcp4.get('error') or "kea-dhcp4 doesn't answer"]}
+        return {'status': 'down', 'errors': [dhcp4.get('error') or f"{daemon} doesn't answer"]}
     sockets = dhcp4.get('sockets') or {}
     if sockets.get('status', 'ready') == 'ready':     # Kea before 2.0 doesn't report it
         return None
@@ -149,17 +163,32 @@ def check_node(settings, conn, node, background=True):
     kea = drift.dhcp_changed(node, status)
     kea_note = f"; Kea config changed outside LiteBlox: {', '.join(kea)}" if kea else ''
     if node['dhcp']:
-        dhcp4 = (((status or {}).get('kea') or {}).get('services') or {}).get('dhcp4') or {}
+        services = ((status or {}).get('kea') or {}).get('services') or {}
+        dhcp4, dhcp6 = services.get('dhcp4') or {}, services.get('dhcp6') or {}
         ha_state = ((dhcp4.get('ha') or {}).get('local') or {}).get('state')
-        sockets = listening(dhcp4)
+        ha6_state = ((dhcp6.get('ha') or {}).get('local') or {}).get('state')
+        sockets, sockets6 = listening(dhcp4), listening(dhcp6, 'kea-dhcp6')
         with conn:
-            conn.execute('UPDATE nodes SET dhcp_drift = ?, dhcp_ha_state = ?, dhcp_ha_checked_at = ?, dhcp_sockets = ? '
-                         'WHERE id = ?', (json.dumps(kea) if kea else None, ha_state, _now() if ha_state else None,
-                                          json.dumps(sockets) if sockets else None, node['id']))
+            conn.execute('UPDATE nodes SET dhcp_drift = ?, dhcp_ha_state = ?, dhcp_ha_checked_at = ?, dhcp_sockets = ?, '
+                         'dhcp6_ha_state = ?, dhcp6_ha_checked_at = ?, dhcp6_sockets = ? WHERE id = ?',
+                         (json.dumps(kea) if kea else None, ha_state, _now() if ha_state else None,
+                          json.dumps(sockets) if sockets else None, ha6_state, _now() if ha6_state else None,
+                          json.dumps(sockets6) if sockets6 else None, node['id']))
+        ra = (status or {}).get('ra') or {}
+        if ra.get('ready') and not ra.get('in_place'):
+            kea_note += "; radvd's config isn't in place"
+        elif ra.get('ready') and ra.get('interfaces') and not ra.get('active'):
+            kea_note += '; radvd is not running'
         if ha_state and ha_state != 'hot-standby':
             kea_note += f'; DHCP failover: {ha_state}'
+        if ha6_state and ha6_state != 'hot-standby':
+            kea_note += f'; DHCPv6 failover: {ha6_state}'
         if sockets:
             kea_note += f"; Kea DHCP {sockets['status']}: {'; '.join(sockets['errors'])}"
+        if sockets6:
+            kea_note += f"; Kea DHCPv6 {sockets6['status']}: {'; '.join(sockets6['errors'])}"
+            if not sockets or sockets6['status'] == 'failed':
+                sockets = sockets6          # the reload below starts kea-dhcp6's retries over as well
         from ..dhcp import apply as dhcp_apply
         # a DHCP change it missed (down during a promote, say): write it now, at most every 10 minutes
         if not kea and not roles.busy() and dhcp_apply.stale(conn, nodes.get_node(conn, node['id'])) \
@@ -209,6 +238,13 @@ def check_all(settings, log=print, background=True):
                 log(check_node(settings, conn, node, background))
             except Exception as e:      # one node's trouble mustn't stop the others' checks
                 log(f"{node['name']}: health check failed: {e}")
+        try:
+            from ..dhcp import ra
+            line = ra.backstop(settings, conn, background)
+            if line:
+                log(line)
+        except Exception as e:
+            log(f'router advertisement backstop failed: {e}')
         try:
             _sample_leases(settings, conn)
             stats.prune(conn)

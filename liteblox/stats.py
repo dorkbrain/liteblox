@@ -16,9 +16,9 @@ BUCKET = 900
 _last_queries = {}
 
 
-def _add(conn, metric, value, at, node_id=None, subnet_id=None):
-    conn.execute('INSERT INTO samples (node_id, subnet_id, metric, at, value) VALUES (?, ?, ?, ?, ?)',
-                 (node_id, subnet_id, metric, int(at), float(value)))
+def _add(conn, metric, value, at, node_id=None, subnet_id=None, subnet6_id=None):
+    conn.execute('INSERT INTO samples (node_id, subnet_id, subnet6_id, metric, at, value) VALUES (?, ?, ?, ?, ?, ?)',
+                 (node_id, subnet_id, subnet6_id, metric, int(at), float(value)))
 
 
 def node_figures(stats, node_id, at):
@@ -62,33 +62,44 @@ def sample_leases(conn, use, at=None):
             _add(conn, 'leases_outside', u['outside'], at, subnet_id=subnet_id)
 
 
+def sample_leases6(conn, use, at=None):
+    """use: leases.pool_use6() ({subnet id: {addresses, in_pool, prefixes}})."""
+    at = at or time.time()
+    with conn:
+        for subnet_id, u in use.items():
+            _add(conn, 'leases6_active', u['addresses'], at, subnet6_id=subnet_id)
+            _add(conn, 'leases6_in_pool', u['in_pool'], at, subnet6_id=subnet_id)
+            _add(conn, 'prefixes6_active', u['prefixes'], at, subnet6_id=subnet_id)
+
+
 def prune(conn, now=None):
     """Roll per-minute rows older than two days into 15-minute averages; drop rolled rows after 30 days."""
     now = now or time.time()
     cutoff = int(now - KEEP_MINUTES) // BUCKET * BUCKET      # whole buckets only
     with conn:
-        conn.execute('INSERT INTO samples (node_id, subnet_id, metric, at, period, value) '
-                     'SELECT node_id, subnet_id, metric, at / ? * ?, ?, AVG(value) FROM samples '
-                     'WHERE period = 60 AND at < ? GROUP BY node_id, subnet_id, metric, at / ?',
+        conn.execute('INSERT INTO samples (node_id, subnet_id, subnet6_id, metric, at, period, value) '
+                     'SELECT node_id, subnet_id, subnet6_id, metric, at / ? * ?, ?, AVG(value) FROM samples '
+                     'WHERE period = 60 AND at < ? GROUP BY node_id, subnet_id, subnet6_id, metric, at / ?',
                      (BUCKET, BUCKET, BUCKET, cutoff, BUCKET))
         conn.execute('DELETE FROM samples WHERE period = 60 AND at < ?', (cutoff,))
         conn.execute('DELETE FROM samples WHERE period = ? AND at < ?', (BUCKET, int(now - KEEP_ROLLED)))
 
 
-def series(conn, metric, node_id=None, subnet_id=None, hours=24, now=None):
+def series(conn, metric, node_id=None, subnet_id=None, hours=24, now=None, subnet6_id=None):
     """[(unix time, value), ...] oldest first, for one node's or one subnet's metric."""
     now = now or time.time()
     rows = conn.execute('SELECT at, value FROM samples WHERE metric = ? AND node_id IS ? AND subnet_id IS ? '
-                        'AND at >= ? ORDER BY at', (metric, node_id, subnet_id, int(now - hours * 3600)))
+                        'AND subnet6_id IS ? AND at >= ? ORDER BY at',
+                        (metric, node_id, subnet_id, subnet6_id, int(now - hours * 3600)))
     return [(r['at'], r['value']) for r in rows]
 
 
-def latest(conn, metric, node_id=None, subnet_id=None, within=300, now=None):
+def latest(conn, metric, node_id=None, subnet_id=None, within=300, now=None, subnet6_id=None):
     """The newest value if it's recent (default: the last 5 minutes), else None."""
     now = now or time.time()
     row = conn.execute('SELECT value FROM samples WHERE metric = ? AND node_id IS ? AND subnet_id IS ? '
-                       'AND at >= ? ORDER BY at DESC LIMIT 1',
-                       (metric, node_id, subnet_id, int(now - within))).fetchone()
+                       'AND subnet6_id IS ? AND at >= ? ORDER BY at DESC LIMIT 1',
+                       (metric, node_id, subnet_id, subnet6_id, int(now - within))).fetchone()
     return row['value'] if row else None
 
 

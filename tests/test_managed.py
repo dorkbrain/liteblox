@@ -44,6 +44,7 @@ class FakeNode:
         self.fail_kea_stage = False
         self.kea_sockets = 'ready'      # what status-get says about kea-dhcp4's interface sockets
         self.kea_leases = []            # lease4-get-page rows
+        self.kea_leases6 = []           # lease6-get-page rows
         self.kea_ha_state = None        # kea-dhcp4's HA state in status-get, when it's in a pair
         self.kea_commands = []
         self.chrony_files = {}          # chrony: role -> text, as last committed
@@ -77,7 +78,10 @@ class FakeNode:
                                          else {'running': False, 'error': 'connection refused'})
                                      for s, up in self.kea_running.items()},
                         'files': {r: sha(t) for r, t in self.kea_files.items()}},
-                'time': self.time_status(), 'zones_writable': {}}
+                'time': self.time_status(), 'zones_writable': {},
+                'ra': {'ready': True, 'installed': True, 'active': 'interface ' in self.kea_files['radvd.conf'],
+                       'interfaces': [], 'in_place': True} if 'radvd.conf' in self.kea_files
+                else {'ready': False, 'installed': False}}
 
     # chrony
     def stats(self):
@@ -136,6 +140,8 @@ class FakeNode:
         for role, text in files.items():
             if role in agent.KEA_TLS:
                 agent.validate_tls(role, text)
+            elif role == agent.RADVD_ROLE:
+                agent.validate_radvd(text)
             else:
                 agent.validate_kea(role, text, cfg)
         if self.fail_kea_stage:
@@ -149,6 +155,8 @@ class FakeNode:
         for role, text in files.items():
             if role in agent.KEA_TLS:
                 agent.validate_tls(role, text)
+            elif role == agent.RADVD_ROLE:
+                agent.validate_radvd(text)
             else:
                 agent.validate_kea(role, text, cfg)
         if self.fail_kea_stage:
@@ -179,6 +187,22 @@ class FakeNode:
                         > tuple(int(x) for x in start.split('.'))]
             page = rows[:arguments['limit']]
             return {'result': 0, 'arguments': {'leases': page, 'count': len(page)}} if page else {'result': 3}
+        if command == 'lease6-get-page':
+            import ipaddress
+            start = arguments['from']
+            rows = sorted(self.kea_leases6, key=lambda r: int(ipaddress.ip_address(r['ip-address'])))
+            if start != 'start':
+                rows = [r for r in rows if int(ipaddress.ip_address(r['ip-address'])) > int(ipaddress.ip_address(start))]
+            page = rows[:arguments['limit']]
+            return {'result': 0, 'arguments': {'leases': page, 'count': len(page)}} if page else {'result': 3}
+        if command == 'lease6-del':
+            kind = arguments.get('type', 'IA_NA')
+            match = [r for r in self.kea_leases6 if r['ip-address'] == arguments['ip-address']
+                     and r.get('type', 'IA_NA') == kind]
+            if not match:
+                return {'result': 3, 'text': 'IPv6 lease not found.'}
+            self.kea_leases6.remove(match[0])
+            return {'result': 0, 'text': 'IPv6 lease deleted.'}
         if command in ('lease4-get', 'lease4-del'):
             match = [r for r in self.kea_leases if r['ip-address'] == arguments['ip-address']]
             if not match:
@@ -188,7 +212,8 @@ class FakeNode:
                 return {'result': 0, 'text': 'IPv4 lease deleted.'}
             return {'result': 0, 'arguments': match[0]}
         args = {'pid': 7, **({'sockets': {'status': self.kea_sockets}} if service == 'dhcp4' else {})}
-        if service == 'dhcp4' and self.kea_ha_state and 'high-availability' in self.kea_files.get('kea-dhcp4.conf', ''):
+        role = {'dhcp4': 'kea-dhcp4.conf', 'dhcp6': 'kea-dhcp6.conf'}.get(service)
+        if role and self.kea_ha_state and 'high-availability' in self.kea_files.get(role, ''):
             args['high-availability'] = [{'ha-servers': {'local': {'state': self.kea_ha_state}}}]
         return {'result': 0, 'arguments': args}
 

@@ -3,7 +3,7 @@
 {% block title %}Devices seen · IPAM · LiteBlox{% endblock %}
 {% block ipam %}
 <h1><a href="/ipam">IPAM</a> · Devices seen</h1>
-<p class="page-intro muted small">Every MAC the nodes have seen on their networks in the last {{ keep_days }} days, from their neighbour (ARP) tables, read every minute. A node sees only the networks it's on. <a href="/help/ipam#devices-seen">More in Help</a>.</p>
+<p class="page-intro muted small">Every MAC the nodes have seen on their networks in the last {{ keep_days }} days, from their neighbour tables (ARP, and NDP for IPv6), read every minute. A device's IPv6 addresses show under its IPv4 one. A node sees only the networks it's on. <a href="/help/ipam#devices-seen">More in Help</a>.</p>
 {% for f in flapping %}
 <p class="notice flap"><strong><a href="/search?q={{ f.ip }}#address">{{ f.ip }}</a></strong>: {{ f.macs|length }} different MACs ({{ f.changes }} changes): {{ f.macs|join(', ') }}. Two devices may be using this address.</p>
 {% endfor %}
@@ -17,9 +17,10 @@
   <div class="table-wrap"><table class="addresses ipam-table">
     <thead><tr>{% for key, label in [('ip', 'IP'), ('mac', 'MAC'), ('name', 'Name'), ('lease', 'Last seen')] %}<th{% if key == 'ip' %} aria-sort="ascending"{% endif %}><button type="button" class="sort" data-sort="{{ key }}">{{ label }}</button></th>{% endfor %}<th>First seen</th><th>Earlier addresses</th><th>Network</th>{% if user.is_admin %}<th></th>{% endif %}</tr></thead>
     <tbody>{% for d in rows %}
-    <tr class="{{ 'flap' if d.flapping }}" data-search="{{ (d.ip ~ ' ' ~ d.mac ~ ' ' ~ d.vendor ~ ' ' ~ d.label ~ ' ' ~ d.comment ~ (' wi-fi repeater' if d.repeater else '') ~ ' ' ~ d.names|join(' ') ~ ' ' ~ d.earlier|join(' '))|lower }}"
+    <tr class="{{ 'flap' if d.flapping }}" data-search="{{ (d.ip ~ ' ' ~ d.mac ~ ' ' ~ d.vendor ~ ' ' ~ d.label ~ ' ' ~ d.comment ~ (' wi-fi repeater' if d.repeater else '') ~ ' ' ~ d.names|join(' ') ~ ' ' ~ d.earlier|join(' ') ~ ' ' ~ d.v6|join(' '))|lower }}"
         data-order="{{ loop.index0 }}" data-mac="{{ d.mac }}" data-name="{{ (d.names[0] if d.names else '')|lower }}" data-state="" data-lease="{{ now - d.last_seen }}">
-      <td><a href="/search?q={{ d.ip }}#address"><code>{{ d.ip }}</code></a>{% if d.flapping %} <span class="pill warn">flapping</span>{% endif %}</td>
+      <td><a href="/search?q={{ d.ip }}#address"><code>{{ d.ip }}</code></a>{% if d.flapping %} <span class="pill warn">flapping</span>{% endif %}
+        {%- for a in d.v6[:3] %}<div class="small"><a href="/search?q={{ a }}#address"><code>{{ a }}</code></a></div>{% endfor %}{% if d.v6|length > 3 %}<div class="muted small" title="{{ d.v6[3:]|join(', ') }}">and {{ d.v6|length - 3 }} more IPv6</div>{% endif %}</td>
       <td x-data="{ edit: false }"><a href="/ipam/devices/{{ d.mac }}"><code>{{ d.mac }}</code></a>{% if d.expected %} <span class="pill" title="expected on {{ d.ip }}: changes between its expected MACs aren't flapping">expected</span>{% endif %}{% if d.repeater %} <span class="pill" title="a Wi-Fi repeater's MAC: it stands in for the devices connected through the repeater, so it isn't flapping or a conflict wherever it shows">repeater</span>{% endif %}
         {%- if d.label or d.vendor %}<div class="muted small">{% if d.label %}<strong>{{ d.label }}</strong>{% endif %}{% if d.label and d.vendor %} · {% endif %}{{ d.vendor }}</div>{% endif %}
         {%- if user.is_admin %}<button type="button" class="link small" x-show="!edit" @click="edit = true; $nextTick(() => $refs.label.focus())">{{ 'Edit label' if d.label else 'Label' }}</button>

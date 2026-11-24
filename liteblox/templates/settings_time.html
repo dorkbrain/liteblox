@@ -32,7 +32,7 @@
     <p class="muted small">Options after the address: <code>prefer</code>, <code>nts</code> (authenticated time, if the server offers it), <code>minpoll N</code>/<code>maxpoll N</code>, <code>noiburst</code> (<code>iburst</code>, a quick first sync, is on by default).{% if not custom %} This is Debian's default pool, until you save your own.{% endif %}</p>
     {% if nodes %}
     <h2>Serving time</h2>
-    <p class="muted small">A node can answer other machines' time requests too: name the networks it serves (one per line, like <code>192.168.0.0/24</code>), and open UDP 123 on it. <strong>Keep serving when the sources are unreachable</strong> lets it go on answering from its own clock (with two such nodes they agree among themselves), instead of going quiet. <a href="/help/ntp#serving-time">More</a></p>
+    <p class="muted small">A node can answer other machines' time requests too: name the networks it serves (one per line, like <code>192.168.0.0/24</code> or <code>fd00:1:2:100::/64</code>), and open UDP 123 on it. <strong>Keep serving when the sources are unreachable</strong> lets it go on answering from its own clock (with two such nodes they agree among themselves), instead of going quiet. <a href="/help/ntp#serving-time">More</a></p>
     <div class="table-wrap"><table>
       <thead><tr><th>Node</th><th>Serves time</th><th>To networks</th><th>Keep serving</th></tr></thead>
       <tbody>{% for n in nodes %}{% set v = serving[n.id] %}

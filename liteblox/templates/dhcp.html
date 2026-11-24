@@ -8,7 +8,9 @@
   <div class="inline-actions">
     <a class="button secondary" href="/dhcp/leases">Leases</a>
     <a class="button secondary" href="/dhcp/settings">Settings</a>
-    {% if user.is_admin %}<a class="button" href="/dhcp/subnets/new">Add subnet</a>{% endif %}
+    <a class="button secondary" href="/dhcp/v6/settings">DHCPv6 settings</a>
+    {% if user.is_admin %}<a class="button secondary" href="/dhcp/v6/subnets/new">Add IPv6 subnet</a>
+    <a class="button" href="/dhcp/subnets/new">Add subnet</a>{% endif %}
   </div>
 </div>
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
@@ -25,6 +27,8 @@
     <div class="server-line"><a href="/nodes/{{ s.node.id }}"><strong>{{ s.node.name }}</strong></a>
       {%- if s.role %} <span class="pill {{ 'ready' if s.role == 'primary' }}">{{ s.role }}</span>{% endif %}
       {%- if s.ha %} <span class="pill {{ 'ready' if s.ha.local.state == 'hot-standby' else ('error' if s.ha.local.state == 'terminated' else 'warn') }}" title="{{ s.ha.remote.name }}: {{ s.ha.remote.state }}{{ '' if s.ha.remote.in_touch else ', not in touch' }}">{{ s.ha.local.state }}</span>{% endif %}
+      {%- if s.ha6 %} <span class="pill {{ 'ready' if s.ha6.local.state == 'hot-standby' else ('error' if s.ha6.local.state == 'terminated' else 'warn') }}" title="DHCPv6 failover; {{ s.ha6.remote.name }}: {{ s.ha6.remote.state }}{{ '' if s.ha6.remote.in_touch else ', not in touch' }}">v6 {{ s.ha6.local.state }}</span>{% endif %}
+      {%- if not s.dhcp6 and subnets6 %} <a class="pill warn" href="/nodes/{{ s.node.id }}" title="Repair this node once to set up kea-dhcp6: until then it serves no IPv6 subnet">no DHCPv6 until Repair</a>{% endif %}
       <span class="muted small">{% if s.served %}serves {% for i in s.served %}<code>{{ i }}</code>{% if i in s.stands_for %} (for {{ pair.primary_name }}'s <code>{{ s.stands_for[i] }}</code>){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}serves nothing yet{% endif %}</span></div>
     {% if s.error %}<p class="error small">{{ s.error }}</p>
     {% elif user.is_admin and s.role != 'standby' %}
@@ -52,7 +56,7 @@
 <section class="card spaced" id="pair">
   <h2>Failover pair</h2>
   {% if pair.active %}
-  <p><strong>{{ pair.primary_name }}</strong> serves (primary); <strong>{{ pair.standby_name }}</strong> mirrors every lease and takes over if it stops answering (standby). They talk over TLS on <code>{{ pair.primary_address }}:{{ pair.port }}</code> and <code>{{ pair.standby_address }}:{{ pair.port }}</code>. <a href="/help/dhcp#a-failover-pair">How it works</a></p>
+  <p><strong>{{ pair.primary_name }}</strong> serves (primary); <strong>{{ pair.standby_name }}</strong> mirrors every lease and takes over if it stops answering (standby). They talk over TLS on <code>{{ pair.primary_address }}:{{ pair.port }}</code> and <code>{{ pair.standby_address }}:{{ pair.port }}</code>{% if subnets6 %}, and on port {{ pair.port6 }} for DHCPv6{% endif %}. <a href="/help/dhcp#a-failover-pair">How it works</a></p>
   {% if user.is_admin %}
   <form method="post" action="/dhcp/ha/unpair" class="inline-actions" data-confirm="End the failover pair? The node you keep serves alone; the other stops serving DHCP." data-confirm-ok="End the pair">
     <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
@@ -68,6 +72,7 @@
       <label>its link address <select name="{{ role }}_address">{% for s in servers %}{% for a in s.addresses %}<option value="{{ a }}">{{ s.node.name }}: {{ a }}</option>{% endfor %}{% endfor %}</select></label></div>
     {% endfor %}
     <label class="small">Port <input name="port" value="{{ pair.port }}" size="6"></label>
+    <label class="small">DHCPv6 port <input name="port6" value="{{ pair.port6 }}" size="6" title="kea-dhcp6's own failover listener, used once there's an IPv6 subnet"></label>
     <p class="muted small">Pick each node's address on the network the two should talk over; the DHCP network itself is a good choice.</p>
     <div id="pair-review"></div>
     <div class="inline-actions"><button type="button" class="secondary" hx-post="/dhcp/ha/preview" hx-include="#pair-form" hx-target="#pair-review" hx-swap="innerHTML">Review</button></div>
@@ -77,7 +82,7 @@
 {% endif %}
 
 <section class="card spaced">
-  <h2>Subnets</h2>
+  <h2>{{ 'IPv4 subnets' if subnets6 else 'Subnets' }}</h2>
   {% if subnets %}
   <div class="table-wrap"><table>
     <thead><tr><th>Subnet</th><th>Interface</th><th>Pools</th><th>Leases</th><th>Reservations</th><th>Options</th><th>Comment</th></tr></thead>
@@ -90,6 +95,25 @@
       <td class="small">{% for k, v in sub.options|dictsort %}<span class="pill" title="{{ k }}: {{ v|join(', ') if v is not string else v }}">{{ k }}</span> {% else %}<span class="muted">from the DHCP settings</span>{% endfor %}</td>
       <td class="muted small">{{ sub.comment }}</td></tr>{% endfor %}</tbody>
   </table></div>
-  {% else %}{{ empty('No subnets yet.' ~ (' Add the subnet a served interface is on.' if serving else (' Add one now and tick its interface under Servers when Kea should answer there.' if servers else ' Set up DHCP on a node first.')), '/dhcp/subnets/new' if user.is_admin and servers, 'Add subnet') }}{% endif %}
+  {% else %}{{ empty('No IPv4 subnets yet.' ~ (' Add the subnet a served interface is on.' if serving else (' Add one now and tick its interface under Servers when Kea should answer there.' if servers else ' Set up DHCP on a node first.')), '/dhcp/subnets/new' if user.is_admin and servers, 'Add subnet') }}{% endif %}
 </section>
+
+{% if subnets6 %}
+<section class="card spaced" id="v6">
+  <div class="toolbar"><h2 class="grow">IPv6 subnets</h2>
+    <a class="small nowrap" href="/dhcp/v6/leases.csv" title="Download every IPv6 subnet's addresses and delegated prefixes as CSV, read from Kea again">Export CSV</a></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Subnet</th><th>Interface</th><th>Pools</th><th>Delegated prefixes</th><th>Leases</th><th>Reservations</th><th>Options</th><th>Comment</th></tr></thead>
+    <tbody>{% for row in subnets6 %}{% set sub = row.subnet %}<tr>
+      <td><a href="/dhcp/v6/subnets/{{ sub.id }}"><code>{{ sub.prefix }}</code></a></td>
+      <td><code>{{ sub.interface }}</code>{% if sub.interface not in served_names %} <span class="pill warn" title="Saved, but no node serves {{ sub.interface }} yet: Kea answers for it once you tick it under Servers">not served</span>{% endif %}</td>
+      <td class="small">{{ sub.pools|join(', ') or '–' }}</td>
+      <td class="small">{% for p in sub.pd_pools %}/{{ p.delegated_len }}s from <code>{{ p.prefix }}</code>{% if not loop.last %}, {% endif %}{% else %}<span class="muted">–</span>{% endfor %}</td>
+      <td><a href="/dhcp/v6/subnets/{{ sub.id }}/addresses">{{ row.active|int if row.active is not none else '–' }}{% if row.prefixes %} + {{ row.prefixes|int }} prefixes{% endif %}</a></td>
+      <td><a href="/dhcp/v6/subnets/{{ sub.id }}/addresses">{{ sub.reservations|length }}</a></td>
+      <td class="small">{% for k, v in sub.options|dictsort %}<span class="pill" title="{{ k }}: {{ v|join(', ') }}">{{ k }}</span> {% else %}<span class="muted">from the DHCPv6 settings</span>{% endfor %}</td>
+      <td class="muted small">{{ sub.comment }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+{% endif %}
 {% endblock %}

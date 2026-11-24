@@ -6,6 +6,7 @@ LABELS = {
     'backup': 'Backed up', 'backup_download': 'Downloaded a backup', 'backup_settings': 'Changed backup settings',
     'demote_dismiss': 'Dismissed a demote report', 'demote_reapply': 'Put back records from a demote report',
     'dhcp_apply': 'Changed DHCP', 'dhcp_lease_delete': 'Deleted a lease',
+    'dhcp6_ra_auto_off': 'Turned router advertisements off (the development time limit)',
     'dhcp_reservation_comment': "Changed a reservation's comment",
     'draft_discard': 'Discarded a draft',
     'drift_import': "Kept a node's own config", 'drift_overwrite': "Overwrote a node's changed config",

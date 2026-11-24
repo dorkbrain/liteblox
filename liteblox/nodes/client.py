@@ -64,9 +64,11 @@ class AgentClient:
         return self._request('POST', '/agent/upgrade', json={'version': version, 'sha256': digest,
                                                              'source': source}).json()
 
-    def neigh(self):
-        """The node's IPv4 neighbour table: [{ip, mac, dev, state, used, confirmed, updated, probes}] (agent 3.4+)."""
-        return self._request('GET', '/neigh').json()['neighbours']
+    def neigh(self, family=4):
+        """The node's IPv4 (or IPv6, agent 6.0+) neighbour table: [{ip, mac, dev, state, used, confirmed, updated,
+        probes}] (agent 3.4+)."""
+        params = {'family': '6'} if family == 6 else None
+        return self._request('GET', '/neigh', params=params).json()['neighbours']
 
     def probe(self, addresses, interval_ms=100, wait=2.0):
         """Ping addresses on the node's own networks and read their neighbour entries (agent 3.4+):

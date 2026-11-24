@@ -1,4 +1,4 @@
-"""Stand-ins for Kea in the agent tests: kea-dhcp4 / kea-dhcp-ddns (-t, -v), `ip -j addr` and `ip -4 -s -j neigh`, and a
+"""Stand-ins for Kea in the agent tests: kea-dhcp4 / kea-dhcp6 / kea-dhcp-ddns (-t, -v), `ip -j addr` and `ip -4 -s -j neigh`, and a
 control socket that answers like Kea (one JSON answer, then it closes the connection).
 
   - a config file containing BROKEN fails -t
@@ -16,7 +16,9 @@ IP_ADDR = [
     {'ifname': 'ens18', 'flags': ['BROADCAST', 'UP'],
      'addr_info': [{'family': 'inet', 'local': '192.0.2.53', 'prefixlen': 24}]},
     {'ifname': 'ens19', 'flags': ['BROADCAST', 'UP'],
-     'addr_info': [{'family': 'inet', 'local': '198.51.100.53', 'prefixlen': 24}]},
+     'addr_info': [{'family': 'inet', 'local': '198.51.100.53', 'prefixlen': 24},
+                   {'family': 'inet6', 'local': 'fd00:1:2:100::53', 'prefixlen': 64},
+                   {'family': 'inet6', 'local': 'fe80::53', 'prefixlen': 64}]},
 ]
 
 
@@ -53,12 +55,24 @@ IP_NEIGH = [
 ]
 
 
+IP_NEIGH6 = [
+    {'dst': 'fd00:1:2:100::10', 'dev': 'ens19', 'lladdr': 'bc:24:11:6c:51:d8', 'used': 3, 'confirmed': 2, 'updated': 2,
+     'state': ['REACHABLE']},
+    {'dst': 'fe80::be24:11ff:fe6c:51d8', 'dev': 'ens19', 'lladdr': 'bc:24:11:6c:51:d8', 'used': 3, 'confirmed': 2,
+     'updated': 2, 'state': ['REACHABLE']},
+    {'dst': 'fd00:1:2:100::99', 'dev': 'ens19', 'used': 1, 'confirmed': 60, 'updated': 1, 'state': ['INCOMPLETE']},
+]
+
+
 def ip(args):
     if args == ['-j', 'addr']:
         print(json.dumps(IP_ADDR))
         return 0
     if args == ['-4', '-s', '-j', 'neigh']:
         print(json.dumps(IP_NEIGH))
+        return 0
+    if args == ['-6', '-s', '-j', 'neigh']:
+        print(json.dumps(IP_NEIGH6))
         return 0
     return 1
 
@@ -97,7 +111,8 @@ class FakeKeaSocket:
                     'remote': {'role': 'standby', 'server-name': 'ns2', 'last-state': 'hot-standby', 'in-touch': True}}}]
             return {'result': 0, 'arguments': args}
         if command == 'config-set':
-            subnets = request['arguments']['Dhcp4'].get('subnet4') or []
+            top, key = ('Dhcp6', 'subnet6') if self.service == 'dhcp6' else ('Dhcp4', 'subnet4')
+            subnets = request['arguments'][top].get(key) or []
             if self.unknown_interface and any(x.get('interface') == self.unknown_interface for x in subnets):
                 return {'result': 1, 'text': 'still not present'}
             self.unknown_interface = None                 # opening the sockets re-detected the interfaces
@@ -127,7 +142,7 @@ def timedatectl(args):
     return 1
 
 
-TOOLS = {'kea-dhcp4': kea, 'kea-dhcp-ddns': kea, 'ip': ip, 'timedatectl': timedatectl}
+TOOLS = {'kea-dhcp4': kea, 'kea-dhcp6': kea, 'kea-dhcp-ddns': kea, 'ip': ip, 'timedatectl': timedatectl}
 
 if __name__ == '__main__':
     sys.exit(TOOLS[sys.argv[1]](sys.argv[2:]))

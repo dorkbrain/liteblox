@@ -14,7 +14,7 @@ from ..db import audit, get_db
 from ..nodes import service as nodes
 from ..nodes.client import AgentError
 from ..templating import templates
-from . import model, seen, view
+from . import model, seen, view, view6
 
 router = APIRouter()
 
@@ -38,13 +38,21 @@ def _context(request, conn, user, current=None):
     found = model.networks(conn)
     facts = view.gather(conn, _settings(request))
     use = {}
+    facts6 = None
+    if any(n.version == 6 and not n.container for n in found):
+        facts6 = view6.gather(conn, _settings(request))         # one look over every IPv6 address
+        facts.errors += [e for e in facts6[0].errors if e not in facts.errors]
+        known6 = view6.known(facts6[0], model.Network(None, '::/0'), model.notes(conn))
     for n in found:
         if n.container:
             c = view.container_counts(n)
-            use[n.id] = (c['assigned'], n.net.num_addresses)
+            use[n.id] = (c['assigned'], c['assigned'] + c['free'], c['unit'])
+        elif n.version == 6:
+            # no share of a /64 to show: how many addresses LiteBlox knows of there
+            use[n.id] = (sum(1 for a in known6 if a in n.net), None, 'known')
         else:
-            use[n.id] = view.usage(facts, n)
-    return {'user': user, 'networks': found, 'facts': facts, 'use': use, 'current': current,
+            use[n.id] = (*view.usage(facts, n), 'addresses')
+    return {'user': user, 'networks': found, 'facts': facts, 'facts6': facts6, 'use': use, 'current': current,
             'suggestions': model.suggestions(conn, found, facts.subnets), 'errors': facts.errors,
             'path': model.path(found, current) if current else []}
 
@@ -72,11 +80,12 @@ def _nodes_on(conn, network):
     for node in conn.execute("SELECT * FROM nodes WHERE status = 'ready' ORDER BY (bind = 1 OR dhcp = 1 OR ntp = 1), name"):
         for prefix in json.loads(node['networks'] or '[]'):
             try:
-                if ipaddress.IPv4Network(prefix).overlaps(network.net):
-                    out.append(node)
-                    break
+                mine = ipaddress.ip_network(prefix)
             except ValueError:
-                pass
+                continue
+            if mine.version == network.version and mine.overlaps(network.net):
+                out.append(node)
+                break
     return out
 
 
@@ -116,8 +125,11 @@ def network_page(request: Request, network_id: int, user: User = Depends(current
     if network.container:
         counts = view.container_counts(network)
         ctx.update({'cells': view.container_map(facts, network), 'counts': counts, 'children': network.children,
+                    'map_prefix': view.map_prefix(network),
                     'segments': view.svg_donut([('assigned', counts['assigned']), ('free', counts['free'])])})
         return templates.TemplateResponse(request, 'ipam_container.html', ctx)
+    if network.version == 6:
+        return _network6_page(request, conn, user, network, ctx)
     ranges = model.all_ranges(conn, network, facts.subnets)
     highlight = None
     page = 0
@@ -147,9 +159,36 @@ def network_page(request: Request, network_id: int, user: User = Depends(current
         'highlight': highlight, 'first_free': view.first_free(facts, network), 'probe_nodes': _nodes_on(conn, network), 'kinds': model.KINDS,
         'record_link': search.record_link, 'now': int(time.time()), 'resolver': ptr.config(conn)[0],
         'add_dns': user.is_admin and _dns_on(request) and bool(_forward_zones(conn)),
-        'flapping': [f for f in seen.flapping(conn) if ipaddress.IPv4Address(f['ip']) in network.net],
+        'flapping': [f for f in seen.flapping(conn) if ipaddress.ip_address(f['ip']) in network.net],
     })
     return templates.TemplateResponse(request, 'ipam_network.html', ctx)
+
+
+def _network6_page(request, conn, user, network, ctx):
+    from ..dhcp.model import subnets6
+    from . import ptr
+    q = request.query_params
+    facts, prefixes = ctx['facts6']
+    prefixes = view6.prefixes_in(prefixes, network)
+    ranges = model.all_ranges(conn, network, facts.subnets)
+    rows = view6.rows(facts, network, ranges, model.notes(conn))
+    highlight = None
+    try:
+        highlight = ipaddress.ip_address(q.get('ip', '')) if q.get('ip') else None
+    except ValueError:
+        pass
+    ptr.refresh_later(_settings(request), conn, [a['ip'] for a in rows if a['state'] != 'free'])
+    counts = view6.counts(rows)
+    ctx.update({
+        'rows': rows, 'counts': counts, 'states': view.STATES, 'ranges': ranges, 'prefixes': prefixes,
+        'subnets': [s for s in subnets6(conn) if ipaddress.ip_network(s.prefix).overlaps(network.net)],
+        'segments': view.svg_donut([(s, counts[s]) for s in view.USED]),
+        'page': 0, 'used_only': False, 'highlight': highlight, 'probe_nodes': _nodes_on(conn, network),
+        'kinds': model.KINDS, 'record_link': search.record_link, 'now': int(time.time()),
+        'resolver': ptr.config(conn)[0], 'add_dns': user.is_admin and _dns_on(request) and bool(_forward_zones(conn)),
+        'flapping': [f for f in seen.flapping(conn) if ipaddress.ip_address(f['ip']) in network.net],
+    })
+    return templates.TemplateResponse(request, 'ipam_network6.html', ctx)
 
 
 ADDRESS_COLUMNS = ('ip', 'state', 'names', 'ipam_name', 'rdns', 'ptr', 'mac', 'vendor', 'hostname', 'range', 'comment',
@@ -164,6 +203,16 @@ def network_csv(request: Request, network_id: int, used: str = '', user: User = 
     network = _network(model.networks(conn), network_id)
     if network.container:
         raise HTTPException(status_code=404, detail=f'{network.prefix} holds other networks: export those')
+    if network.version == 6:
+        facts, _ = view6.gather(conn, _settings(request), network)
+        out = []
+        for a in view6.rows(facts, network, model.all_ranges(conn, network, facts.subnets), model.notes(conn)):
+            i = view.item(a)
+            i['last_seen'] = csvout.when(i['last_seen'])
+            i['checks'] = [c['text'] for c in i['checks']]
+            out.append([i[c] for c in ADDRESS_COLUMNS])
+        return csvout.response(ADDRESS_COLUMNS, out, csvout.filename('ipam', network.prefix, 'known'),
+                               notes=list(facts.errors))
     used_only, notes = used == '1', []
     if not used_only and network.net.num_addresses > EVERY_ADDRESS_UP_TO:
         used_only = True
@@ -188,7 +237,11 @@ def _settings_page(request, conn, user, network, status_code=200, **extra):
     q = request.query_params
     ctx.update({'network': network, 'kinds': model.KINDS, 'form': {}, 'form_errors': {}, 'range_form': {},
                 'range_errors': {}, 'edit_range': None, 'error': q.get('error'), 'done': q.get('done')})
-    ctx['ranges'] = model.all_ranges(conn, network, ctx['facts'].subnets)
+    if network.version == 6:
+        from ..dhcp.model import subnets6
+        ctx['ranges'] = model.all_ranges(conn, network, subnets6(conn))
+    else:
+        ctx['ranges'] = model.all_ranges(conn, network, ctx['facts'].subnets)
     from . import sweep
     ctx.update({'sweep_nodes': _nodes_on(conn, network), 'sweep_problem': sweep.problem(conn, network)})
     ctx.update(extra)
@@ -240,10 +293,11 @@ async def range_save(request: Request, network_id: int, user: User = Depends(req
     network = _network(model.networks(conn), network_id)
     form = await request.form()
     rid = int(form['range_id']) if (form.get('range_id') or '').isdigit() else None
-    from ..dhcp.model import subnets
+    from ..dhcp.model import subnets, subnets6
     try:
         model.save_range(conn, network, form.get('first'), form.get('last'), form.get('kind', 'static'),
-                         form.get('name', ''), form.get('comment', ''), range_id=rid, subnets=subnets(conn))
+                         form.get('name', ''), form.get('comment', ''), range_id=rid,
+                         subnets=subnets6(conn) if network.version == 6 else subnets(conn))
     except model.IpamError as e:
         return _settings_page(request, conn, user, network, 422, range_form=dict(form), range_errors=e.errors,
                               edit_range=rid)
@@ -273,9 +327,9 @@ async def comment_save(request: Request, user: User = Depends(require_admin), co
     note."""
     form = await request.form()
     try:
-        ip = ipaddress.IPv4Address((form.get('ip') or '').strip())
+        ip = ipaddress.ip_address((form.get('ip') or '').strip())
     except ValueError:
-        raise HTTPException(status_code=400, detail='not an IPv4 address')
+        raise HTTPException(status_code=400, detail='not an IP address')
     text = (form.get('comment') or '').strip()
     back = form.get('back') or '/ipam'
     if not back.startswith('/ipam'):
@@ -310,26 +364,35 @@ def _comment_to_record(request, conn, user, zone, fqdn, ip, text):
             raise ValueError(f'{zone} is not a zone LiteBlox holds')
         if edit.dynamic or edit.zone is None:
             raise ValueError(f"{zone} can't take a comment here: edit it in the zone")
-        rec = next((r for r in edit.zone.records() if r.rtype == 'A' and r.name.to_text().rstrip('.').lower() == fqdn
-                    and r.rdata.strip() == str(ip)), None)
+        rtype = 'A' if ip.version == 4 else 'AAAA'
+        rec = next((r for r in edit.zone.records() if r.rtype == rtype and r.name.to_text().rstrip('.').lower() == fqdn
+                    and _same_ip(r.rdata, ip)), None)
         if rec is None:
-            raise ValueError(f'the A record {fqdn} → {ip} is no longer in {zone}')
+            raise ValueError(f'the {rtype} record {fqdn} → {ip} is no longer in {zone}')
         try:
             editing.apply_row(edit, rec, rec.relative_name(edit.zone.origin), None if rec.ttl is None else str(rec.ttl),
-                              'A', rec.rdata, text, False, None, user.username)
+                              rtype, rec.rdata, text, False, None, user.username)
         except RecordError as e:
             raise ValueError(str(e))
-    audit(conn, user.username, 'record_edit', f'{zone}: {rec.relative_name(edit.zone.origin)} A (comment, from IPAM)')
+    audit(conn, user.username, 'record_edit',
+          f'{zone}: {rec.relative_name(edit.zone.origin)} {rtype} (comment, from IPAM)')
     return f'Comment saved in the draft of {zone}: publish it there.'
 
 
+def _same_ip(text, ip):
+    a = search._ip(text)
+    return a is not None and a == ip
+
+
 def _comment_to_reservation(conn, user, rid, ip, text):
-    row = conn.execute('SELECT * FROM dhcp4_reservations WHERE id = ?', (rid,)).fetchone()
-    if row is None or row['ip_address'] != str(ip):
+    table = 'dhcp4_reservations' if ip.version == 4 else 'dhcp6_reservations'
+    row = conn.execute(f'SELECT * FROM {table} WHERE id = ?', (rid,)).fetchone()
+    if row is None or not _same_ip(row['ip_address'], ip):
         raise ValueError(f'the reservation for {ip} is gone')
     with conn:
-        conn.execute('UPDATE dhcp4_reservations SET comment = ? WHERE id = ?', (text, rid))
-    audit(conn, user.username, 'dhcp_reservation_comment', f"{ip} ({row['hw_address']}): {text or 'removed'}")
+        conn.execute(f'UPDATE {table} SET comment = ? WHERE id = ?', (text, rid))
+    who = row['hw_address'] if ip.version == 4 else (row['duid'] or row['hw_address'])
+    audit(conn, user.username, 'dhcp_reservation_comment', f"{ip} ({who}): {text or 'removed'}")
     return "Saved on the reservation."
 
 
@@ -338,9 +401,9 @@ async def check_address(request: Request, user: User = Depends(require_admin), c
     """One probe of a free address through a node on its network: does anything answer there?"""
     form = await request.form()
     try:
-        ip = ipaddress.IPv4Address((form.get('ip') or '').strip())
+        ip = ipaddress.ip_address((form.get('ip') or '').strip())
     except ValueError:
-        raise HTTPException(status_code=400, detail='not an IPv4 address')
+        raise HTTPException(status_code=400, detail='not an IP address')
     node = _node_on(conn, ip)
     if node is None:
         return HTMLResponse('<span class="muted small">no node on this network to check from</span>')
@@ -378,9 +441,10 @@ def _name_page(request, conn, user, ip, form=None, errors=None, status_code=200)
     from . import names
     ctx = _context(request, conn, user)
     record = names.get(conn, ip)
-    zones = [r['name'] for r in conn.execute("SELECT name FROM zones WHERE name LIKE '%.in-addr.arpa'")]
+    zones = [r['name'] for r in conn.execute("SELECT name FROM zones WHERE name LIKE '%.in-addr.arpa' "
+                                             "OR name LIKE '%.ip6.arpa'")]
     latest = seen.at_address(conn, ip)
-    ctx.update({'ip': ip, 'record': record, 'network': model.leaf_for(ctx['networks'], ipaddress.IPv4Address(ip)),
+    ctx.update({'ip': ip, 'record': record, 'network': model.leaf_for(ctx['networks'], ipaddress.ip_address(ip)),
                 'form': form or record or {'name': '', 'mac': '', 'comment': model.notes(conn).get(ip, '')},
                 'errors': errors or {}, 'back': _name_back(request.query_params.get('back') or
                                                          (form or {}).get('back'), ip),
@@ -444,7 +508,8 @@ def _reverse_for(conn, ip):
     """(name, dynamic) of the reverse zone in LiteBlox that covers ip, or (None, False)."""
     from ..dns import ptr as dns_ptr
     found = {r['name']: bool(r['dynamic']) for r in conn.execute(
-        "SELECT name, dynamic FROM zones WHERE kind = 'primary' AND name LIKE '%.in-addr.arpa'")}
+        "SELECT name, dynamic FROM zones WHERE kind = 'primary' AND (name LIKE '%.in-addr.arpa' OR "
+        "name LIKE '%.ip6.arpa')")}
     name = dns_ptr.reverse_zone_for(ip, list(found))
     return name, found.get(name, False)
 
@@ -454,11 +519,11 @@ def _likely_zone(conn, facts, network, zones, subnet):
     DHCP subnet's names end in; else the first static zone, or the first."""
     counts = {}
     if network is not None:
-        lo, hi = int(network.net.network_address), int(network.net.broadcast_address)
-        for n in facts.used_between(lo, hi):
-            for h in facts.names.get(ipaddress.IPv4Address(n), []):
-                if h['zone'] in zones:
-                    counts[h['zone']] = counts.get(h['zone'], 0) + 1
+        for ip, hits in facts.names.items():
+            if ip in network.net:
+                for h in hits:
+                    if h['zone'] in zones:
+                        counts[h['zone']] = counts.get(h['zone'], 0) + 1
     for dynamic in (False, True):       # a hand-made name usually belongs with the other hand-made ones
         mine = {z: n for z, n in counts.items() if zones[z]['dynamic'] == dynamic}
         if mine:
@@ -472,7 +537,7 @@ def _likely_zone(conn, facts, network, zones, subnet):
 def _suggested_name(conn, facts, ip, zones):
     """The address's IPAM name, else its reservation's or lease's hostname: kept in full when it's in one of
     zones, else its first label."""
-    address = ipaddress.IPv4Address(ip)
+    address = ipaddress.ip_address(ip)
     record = facts.ipam.get(address)
     held = facts.reservations.get(address)
     lease = facts.leases.get(address, (None, None))[1]
@@ -496,9 +561,9 @@ def _dns_zones(request, conn):
 def _dns_page(request, conn, user, ip, form=None, errors=None, error=None, status_code=200):
     zones = _dns_zones(request, conn)
     ctx = _context(request, conn, user)
-    facts = ctx['facts']
-    address = ipaddress.IPv4Address(ip)
+    address = ipaddress.ip_address(ip)
     network = model.leaf_for(ctx['networks'], address)
+    facts = ctx['facts'] if address.version == 4 else _facts6(request, conn, network, address)
     reverse, reverse_dynamic = _reverse_for(conn, ip)
     if form is None:
         zone = _likely_zone(conn, facts, network, zones, facts.subnet_for(address))
@@ -507,10 +572,17 @@ def _dns_page(request, conn, user, ip, form=None, errors=None, error=None, statu
                 'comment': (record or {}).get('comment') or model.notes(conn).get(ip, ''),
                 'ptr': '1' if zones[zone]['auto_ptr'] else ''}
     ctx.update({'ip': ip, 'network': network, 'zones': zones, 'reverse': reverse, 'reverse_dynamic': reverse_dynamic,
-                'form': form,
+                'form': form, 'rtype': 'A' if address.version == 4 else 'AAAA',
                 'names': facts.names.get(address, []), 'errors': errors or {}, 'error': error,
                 'back': _name_back(request.query_params.get('back') or form.get('back'), ip)})
     return templates.TemplateResponse(request, 'ipam_dns.html', ctx, status_code=status_code)
+
+
+def _facts6(request, conn, network, address):
+    """The IPv6 facts around an address: its IPAM network's, or the /64 holding it."""
+    if network is None:
+        network = model.Network(None, str(ipaddress.ip_network(f'{address}/64', strict=False)))
+    return view6.gather(conn, _settings(request), network)[0]
 
 
 @router.get('/ipam/dns/{ip}')
@@ -537,7 +609,7 @@ async def dns_save(request: Request, ip: str, user: User = Depends(require_admin
         return _dns_page(request, conn, user, ip, form, e.errors, status_code=422)
     zone = _zone_of(conn, name) if '.' in name or raw.endswith('.') else None
     if zone is not None and zone not in zones:
-        return _dns_page(request, conn, user, ip, form, {'name': f'{zone} is a forwarding or reverse zone: an A '
+        return _dns_page(request, conn, user, ip, form, {'name': f'{zone} is a forwarding or reverse zone: an address '
                                                                   'record for it goes elsewhere'}, status_code=422)
     if zone is None:
         if raw.endswith('.'):
@@ -558,7 +630,8 @@ async def dns_save(request: Request, ip: str, user: User = Depends(require_admin
             if edit.zone is None:
                 return _dns_page(request, conn, user, ip, form, status_code=409,
                                  error=f"{zone} doesn't parse: fix it on its Raw tab first")
-            notes, warnings, _ = editing.apply_row(edit, None, fqdn + '.', None, 'A', ip, comment or None, ptr_on,
+            rtype = 'A' if ':' not in ip else 'AAAA'
+            notes, warnings, _ = editing.apply_row(edit, None, fqdn + '.', None, rtype, ip, comment or None, ptr_on,
                                                    None, user.username)
         except RecordError as e:
             errors = dict(e.errors)
@@ -569,7 +642,7 @@ async def dns_save(request: Request, ip: str, user: User = Depends(require_admin
         except dynamic.DynamicError as e:
             return _dns_page(request, conn, user, ip, form, status_code=409,
                              error=f'Nothing was added: the update to {zone} failed ({e})')
-    audit(conn, user.username, 'record_add', f'{zone}: {fqdn} A {ip} (from IPAM)')
+    audit(conn, user.username, 'record_add', f'{zone}: {fqdn} {rtype} {ip} (from IPAM)')
     back = _name_back(form.get('back'), ip)
 
     def sentences(first, *notes):
@@ -617,28 +690,33 @@ def _seen_rows(request, conn, facts, networks):
     vendors = oui.table(_settings(request))
     known = {r['mac']: r for r in conn.execute('SELECT * FROM devices')}
     rows = []
+    names6 = view6.names(conn, _settings(request)) if any(':' in d['ip'] or d['v6'] for d in seen.devices(conn)) \
+        else {}
     for d in seen.devices(conn):
-        addr = ipaddress.IPv4Address(d['ip'])
+        addr = ipaddress.ip_address(d['ip'])
         dev = known.get(d['mac'])
         rows.append({**d, 'addr': addr, 'vendor': oui.vendor(None, d['mac'], vendors),
                      'label': dev['label'] if dev else '', 'comment': dev['comment'] if dev else '',
                      'repeater': bool(dev and dev['repeater']),
                      'expected': d['mac'] in (expected.get(d['ip']) or {}).get('macs', ()),
-                     'names': _names_at(facts, addr),
-                     'flapping': d['ip'] in flapping,
+                     'names': list(dict.fromkeys((_names_at(facts, addr) if addr.version == 4 else
+                                                  names6.get(addr, [])) +
+                                                 [n for a in d['v6'] for n in names6.get(ipaddress.ip_address(a), [])])),
+                     'flapping': d['ip'] in flapping or any(a in flapping for a in d['v6']),
                      'network': model.leaf_for(networks, addr)})
-    rows.sort(key=lambda r: int(r['addr']))
+    from ..addrs import sort_key
+    rows.sort(key=lambda r: sort_key(r['addr']))
     return rows
 
 
 def _seen_search(d):
     """What the page's filter box matches, as its data-search attribute has it."""
     return ' '.join([d['ip'], d['mac'], d['vendor'] or '', d['label'] or '', d['comment'] or '',
-                     'wi-fi repeater' if d['repeater'] else '', *d['names'], *d['earlier']]).lower()
+                     'wi-fi repeater' if d['repeater'] else '', *d['names'], *d['earlier'], *d['v6']]).lower()
 
 
 SEEN_COLUMNS = ('ip', 'mac', 'vendor', 'label', 'comment', 'names', 'network', 'first_seen', 'last_seen', 'node',
-                'source', 'earlier_ips', 'flapping', 'expected', 'repeater')
+                'source', 'earlier_ips', 'flapping', 'expected', 'repeater', 'ipv6')
 
 
 @router.get('/ipam/seen.csv')
@@ -648,7 +726,7 @@ def seen_csv(request: Request, q: str = '', user: User = Depends(current_user), 
     words = q.lower().split()
     out = [[d['ip'], d['mac'], d['vendor'], d['label'], d['comment'], d['names'],
             d['network'].prefix if d['network'] else '', csvout.when(d['first_seen']), csvout.when(d['last_seen']),
-            d['node'] or '', d['source'] or '', d['earlier'], d['flapping'], d['expected'], d['repeater']]
+            d['node'] or '', d['source'] or '', d['earlier'], d['flapping'], d['expected'], d['repeater'], d['v6']]
            for d in _seen_rows(request, conn, facts, model.networks(conn))
            if all(w in _seen_search(d) for w in words)]
     return csvout.response(SEEN_COLUMNS, out, csvout.filename('ipam-devices-seen', dated=True), notes=facts.errors)
@@ -668,9 +746,9 @@ async def seen_forget(request: Request, user: User = Depends(require_admin), con
     from . import seen
     form = await request.form()
     try:
-        ip = str(ipaddress.IPv4Address((form.get('ip') or '').strip()))
+        ip = str(ipaddress.ip_address((form.get('ip') or '').strip()))
     except ValueError:
-        raise HTTPException(status_code=400, detail='not an IPv4 address')
+        raise HTTPException(status_code=400, detail='not an IP address')
     mac = (form.get('mac') or '').strip() or None
     seen.forget(conn, ip, mac)
     audit(conn, user.username, 'ipam_forget', f'{ip} {mac}' if mac else ip)
@@ -682,9 +760,9 @@ async def seen_forget(request: Request, user: User = Depends(require_admin), con
 def flapping_ack(request: Request, ip: str, user: User = Depends(require_admin), conn=Depends(get_db)):
     from . import seen
     try:
-        ip = str(ipaddress.IPv4Address(ip))
+        ip = str(ipaddress.ip_address(ip))
     except ValueError:
-        raise HTTPException(status_code=400, detail='not an IPv4 address')
+        raise HTTPException(status_code=400, detail='not an IP address')
     seen.ack(conn, ip, user.username)
     audit(conn, user.username, 'ipam_ack', ip)
     return RedirectResponse(f'/search?q={ip}#address', status_code=303)
@@ -692,9 +770,9 @@ def flapping_ack(request: Request, ip: str, user: User = Depends(require_admin),
 
 def _ip_or_400(ip):
     try:
-        return str(ipaddress.IPv4Address((ip or '').strip()))
+        return str(ipaddress.ip_address((ip or '').strip()))
     except ValueError:
-        raise HTTPException(status_code=400, detail='not an IPv4 address')
+        raise HTTPException(status_code=400, detail='not an IP address')
 
 
 @router.post('/ipam/flapping/{ip}/expect')

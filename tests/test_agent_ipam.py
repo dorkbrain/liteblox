@@ -71,7 +71,7 @@ def test_neigh_endpoint(kea_client):  # noqa: F811
 
 def test_probe_reports_replies_and_neighbour_entries(kea_client, monkeypatch):  # noqa: F811
     client, _ = kea_client
-    monkeypatch.setattr(agent_mod, '_icmp_socket', lambda: FakeIcmp({'198.51.100.20'}))
+    monkeypatch.setattr(agent_mod, '_icmp_socket', lambda family=None: FakeIcmp({'198.51.100.20'}))
     out = client.probe(['198.51.100.10', '198.51.100.20', '198.51.100.99'], interval_ms=10, wait=0.5)
     assert out['method'] == 'icmp'
     r = out['results']
@@ -85,7 +85,7 @@ def test_probe_reports_replies_and_neighbour_entries(kea_client, monkeypatch):  
 def test_probe_falls_back_to_udp_without_icmp_sockets(kea_client, monkeypatch):  # noqa: F811
     client, _ = kea_client
 
-    def refused():
+    def refused(family=None):
         raise PermissionError(13, 'Permission denied')
     monkeypatch.setattr(agent_mod, '_icmp_socket', refused)
     out = client.probe(['198.51.100.77'], interval_ms=10, wait=0.5)
@@ -97,7 +97,10 @@ def test_probe_falls_back_to_udp_without_icmp_sockets(kea_client, monkeypatch): 
     (['127.0.0.1'], 'not on a network'),
     (['198.51.100.0'], 'not on a network'),          # the network address itself
     (['198.51.100.255'], 'not on a network'),        # broadcast
-    (['nope'], 'not an IPv4 address'),
+    (['nope'], 'not an IP address'),
+    (['fe80::1'], 'not on a network'),               # link-local: never probed
+    (['fd00:1:2:100::'], 'not on a network'),        # the subnet-router anycast address
+    (['fd00:9::5'], 'not on a network'),
     ([], 'a list of 1 to 64'),
     ([f'198.51.100.{i}' for i in range(1, 66)], 'a list of 1 to 64'),
 ])
@@ -106,3 +109,41 @@ def test_probe_refuses(kea_client, addresses, why):  # noqa: F811
     with pytest.raises(AgentError) as e:
         client.probe(addresses)
     assert e.value.status == 400 and why in e.value.message
+
+
+# ── IPv6 (6.0) ─────────────────────────────────────────────────────────────────
+
+class FakeIcmp6(FakeIcmp):
+    def sendto(self, packet, addr):
+        assert packet[0] == 128             # an ICMPv6 echo request; the kernel fills in its checksum
+        if addr[0] in self.answer:
+            self.queue.append((b'\x81\0' + packet[2:], (addr[0], 0, 0, 0)))
+
+
+def test_parse_neigh_drops_link_local():
+    rows = [{'dst': 'fe80::1', 'lladdr': 'aa:bb:cc:dd:ee:ff', 'confirmed': 1, 'state': ['REACHABLE']},
+            {'dst': '2001:db8::5', 'lladdr': 'aa:bb:cc:dd:ee:ff', 'confirmed': 1, 'state': ['STALE']}]
+    assert [n['ip'] for n in agent_mod.parse_neigh(rows)] == ['2001:db8::5']
+
+
+def test_neigh_ipv6(kea_client):  # noqa: F811
+    client, _ = kea_client
+    assert [n['ip'] for n in client.neigh(family=6)] == ['fd00:1:2:100::10']
+    assert [n['ip'] for n in client.neigh()] == ['198.51.100.10', '198.51.100.20']
+
+
+def test_probe_ipv6(kea_client, monkeypatch):  # noqa: F811
+    import socket
+    client, _ = kea_client
+    families = []
+
+    def fake(family=socket.AF_INET):
+        families.append(family)
+        return FakeIcmp6({'fd00:1:2:100::10'}) if family == socket.AF_INET6 else FakeIcmp({'198.51.100.20'})
+    monkeypatch.setattr(agent_mod, '_icmp_socket', fake)
+    out = client.probe(['fd00:1:2:100::10', 'fd00:1:2:100::77', '198.51.100.20'], interval_ms=10, wait=0.3)
+    r = out['results']
+    assert families == [socket.AF_INET, socket.AF_INET6]
+    assert r['fd00:1:2:100::10']['replied'] is True and r['fd00:1:2:100::10']['mac'] == 'bc:24:11:6c:51:d8'
+    assert r['fd00:1:2:100::77'] == {'replied': False, 'rtt_ms': None, 'state': None, 'mac': None, 'confirmed': None}
+    assert r['198.51.100.20']['replied'] is True

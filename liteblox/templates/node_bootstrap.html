@@ -16,7 +16,7 @@
     </div>
     {% set set_up = node.agent_version %}
     {% set can_bind = not bind_fixed and (dns_on or node.bind) %}
-    <fieldset x-data="{ dns: {{ 'true' if node.bind else 'false' }}, takeover: {{ 'true' if takeover else 'false' }}, perms: true, bind: true, dhcp: {{ 'true' if dhcp else 'false' }}, ntp: {{ 'true' if ntp else 'false' }} }">
+    <fieldset x-data="{ dns: {{ 'true' if node.bind else 'false' }}, takeover: {{ 'true' if takeover else 'false' }}, perms: true, bind: true, dhcp: {{ 'true' if dhcp else 'false' }}, ntp: {{ 'true' if ntp else 'false' }}, radvd: {{ 'true' if radvd else 'false' }} }">
       <legend>Options</legend>
       {% if can_bind %}
       <input type="hidden" name="services" value="1">
@@ -52,6 +52,14 @@
         <span x-show="dhcp">Set up Kea DHCP: installs <code>kea-dhcp4-server kea-dhcp-ddns-server</code> with a config that serves nothing until you add a subnet. <a href="/help/dhcp">More</a></span>
         <span x-show="!dhcp" x-cloak>No DHCP on this node (it can be set up later).</span>
         {% endif %}</label>
+      <label class="check" x-show="dhcp"><input type="checkbox" name="radvd" value="true" x-model="radvd" {% if radvd %}checked{% endif %}>
+        {% if node.radvd %}
+        <span x-show="radvd">Keep router advertisements (radvd, set up): checks it's installed and re-applies the agent's access to its config. radvd isn't restarted.</span>
+        <span x-show="!radvd" x-cloak>Leave radvd alone: the agent keeps its access to it.</span>
+        {% else %}
+        <span x-show="radvd">Set up router advertisements: installs <code>radvd</code>, stopped. It sends nothing until a DHCPv6 subnet turns them on, and never offers a default route. Only for a network whose router doesn't send them. <a href="/help/ipv6#router-advertisements-from-liteblox">More</a></span>
+        <span x-show="!radvd" x-cloak>No router advertisements from this node (your router sends them).</span>
+        {% endif %}</label>
       <label class="check"><input type="checkbox" name="ntp" value="true" x-model="ntp" {% if ntp %}checked{% endif %}>
         {% if node.ntp %}
         <span x-show="ntp">Keep time sync (set up): checks chrony is installed, re-applies the agent's access to <code>/etc/chrony</code> and the unit that restarts chrony when LiteBlox writes its config, and keeps LiteBlox's <code>chrony.conf</code>. chrony isn't restarted.</span>
@@ -61,7 +69,7 @@
         <span x-show="!ntp" x-cloak>No time sync from LiteBlox: the node keeps whatever it uses now.</span>
         {% endif %}</label>
       <p class="small"><strong>This will:</strong>
-        {% if set_up %}upgrade the agent to {{ version }}{% if node.agent_version and node.agent_version != version %} (from {{ node.agent_version }}){% endif %}{% else %}install the agent ({{ version }}){% endif %}{% if not node.managed and not node.other_liteblox %}<span x-show="dns && takeover">; take over BIND if the node is fresh</span>{% endif %}<span x-show="dns && perms">; check the BIND permissions</span>{% if node.dhcp %}<span x-show="dhcp">; check DHCP and keep its config</span>{% else %}<span x-show="dhcp" x-cloak>; install Kea DHCP</span>{% endif %}{% if node.ntp %}<span x-show="ntp">; check time sync and keep its config</span>{% else %}<span x-show="ntp" x-cloak>; install chrony</span>{% endif %}.</p>
+        {% if set_up %}upgrade the agent to {{ version }}{% if node.agent_version and node.agent_version != version %} (from {{ node.agent_version }}){% endif %}{% else %}install the agent ({{ version }}){% endif %}{% if not node.managed and not node.other_liteblox %}<span x-show="dns && takeover">; take over BIND if the node is fresh</span>{% endif %}<span x-show="dns && perms">; check the BIND permissions</span>{% if node.dhcp %}<span x-show="dhcp">; check DHCP and keep its config</span>{% else %}<span x-show="dhcp" x-cloak>; install Kea DHCP</span>{% endif %}{% if node.radvd %}<span x-show="dhcp && radvd">; check radvd</span>{% else %}<span x-show="dhcp && radvd" x-cloak>; install radvd (stopped)</span>{% endif %}{% if node.ntp %}<span x-show="ntp">; check time sync and keep its config</span>{% else %}<span x-show="ntp" x-cloak>; install chrony</span>{% endif %}.</p>
     </fieldset>
     {% call action_bar('/nodes/' ~ node.id) %}<button type="submit">{% if node.status == 'new' %}Run setup{% else %}Repair / upgrade{% endif %}</button>{% endcall %}
   </form>

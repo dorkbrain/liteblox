@@ -378,6 +378,116 @@ class LeaseDeleted(BaseModel):
     partner: Optional[str] = None           # the failover partner's copy was deleted too
 
 
+# ── DHCPv6 ─────────────────────────────────────────────────────────────────────
+
+class Dhcp6Settings(BaseModel):
+    preferred_lifetime: Optional[int] = None
+    valid_lifetime: Optional[int] = None
+    renew_timer: Optional[int] = None
+    rebind_timer: Optional[int] = None
+    options: dict = {}                      # {dns: [..], search: [..], ntp: [..]}
+    extra_options: list = []
+
+
+class Dhcp6Server(BaseModel):
+    node: str
+    runs_dhcp6: bool                        # kea-dhcp6 is set up (a node from before 6.0 needs one Repair)
+    ha_state: Optional[str] = None          # kea-dhcp6's failover state, in a pair
+
+
+class Dhcp6(BaseModel):
+    servers: list[Dhcp6Server]
+    port6: Optional[int] = None             # a pair's DHCPv6 failover port
+    settings: Dhcp6Settings
+
+
+class Reservation6(BaseModel):
+    id: int
+    duid: str = ''                          # one of duid and hw_address identifies the client
+    hw_address: str = ''
+    ip_address: str = ''                    # '': none (a prefix only, or name only)
+    prefix: str = ''                        # a delegated prefix, or ''
+    hostname: str = ''
+    options: dict = {}
+    comment: str = ''
+
+
+class PdPool(BaseModel):
+    prefix: str                             # e.g. fd00:1:2:f000::/52
+    delegated_len: int                      # the size each router gets, e.g. 60
+
+
+class Subnet6(BaseModel):
+    id: int                                 # Kea's subnet-id (its own numbering, apart from DHCPv4's)
+    prefix: str
+    interface: str
+    pools: list[str]
+    pd_pools: list[PdPool] = []
+    options: dict = {}
+    extra_options: list = []
+    extra: dict = {}
+    preferred_lifetime: Optional[int] = None
+    valid_lifetime: Optional[int] = None
+    renew_timer: Optional[int] = None
+    rebind_timer: Optional[int] = None
+    comment: str = ''
+    ddns: Optional[Ddns] = None
+    ra: bool = False                        # router advertisements from the serving nodes
+    ra_slaac: bool = False                  # ... with the A flag (clients may pick their own address too)
+    reservations: list[Reservation6] = []
+
+
+class Lease6(BaseModel):
+    ip: str                                 # an address, or a delegated prefix's first address
+    type: str                               # address, prefix
+    prefix: str = ''                        # a delegated prefix: ip/len
+    duid: str
+    iaid: Optional[int] = None
+    mac: str = ''                           # when Kea learned one
+    hostname: str = ''
+    subnet_id: Optional[int] = None
+    state: str
+    expires: str                            # ISO 8601, UTC
+    expires_in: int
+    registered: bool
+    reserved: bool
+    node: str
+
+
+class Leases6(BaseModel):
+    leases: list[Lease6]
+    read_from: Optional[str] = None
+    errors: list[str] = []
+
+
+class Reservation6In(BaseModel):
+    duid: str = ''                          # 00:01:00:01:... (other separators are fine); or hw_address
+    hw_address: str = ''
+    ip_address: str = ''                    # an address in the subnet, or ''
+    prefix: str = ''                        # a prefix from one of its delegated-prefix pools, or ''
+    hostname: str = ''                      # one label; '': the client's own name
+    options: dict = {}                      # {dns: [..], search: [..], ntp: [..]} for this client only
+    comment: str = ''
+
+
+class Reservation6Patch(BaseModel):
+    """Only the fields sent change."""
+    duid: Optional[str] = None
+    hw_address: Optional[str] = None
+    ip_address: Optional[str] = None
+    prefix: Optional[str] = None
+    hostname: Optional[str] = None
+    options: Optional[dict] = None
+    comment: Optional[str] = None
+
+
+class Lease6Deleted(BaseModel):
+    ip: str
+    type: str
+    node: str
+    partner: Optional[str] = None
+
+
 # ── time ───────────────────────────────────────────────────────────────────────
 
 class TimeServer(BaseModel):
@@ -408,12 +518,15 @@ class SearchRecord(BaseModel):
 
 class SearchReservation(BaseModel):
     subnet: str
-    subnet_id: int
+    subnet_id: int                          # a DHCPv4 or DHCPv6 subnet's id, as family says
     id: int
     ip: str
     mac: str
     hostname: str = ''
     comment: str = ''
+    family: int = 4
+    duid: Optional[str] = None              # DHCPv6
+    prefix: Optional[str] = None            # DHCPv6: a delegated prefix
 
 
 class SearchLease(BaseModel):
@@ -424,6 +537,10 @@ class SearchLease(BaseModel):
     expires: str                            # ISO 8601, UTC
     subnet_id: Optional[int] = None
     node: Optional[str] = None              # the server it was read from
+    family: int = 4
+    duid: Optional[str] = None              # DHCPv6
+    type: Optional[str] = None              # DHCPv6: address, prefix
+    prefix: Optional[str] = None            # DHCPv6: a delegated prefix
 
 
 class SearchZone(BaseModel):
@@ -436,6 +553,7 @@ class SearchSubnet(BaseModel):
     id: int
     prefix: str
     comment: str = ''
+    family: int = 4
 
 
 class SearchCheck(BaseModel):
@@ -457,7 +575,7 @@ class SearchRdns(BaseModel):
 
 class SearchAddress(BaseModel):
     ip: str
-    names: list[str]                        # A records pointing at it
+    names: list[str]                        # A (or AAAA) records pointing at it
     ptr: list[str]                          # what its PTR records name
     reverse_zone: Optional[str] = None
     reservation: Optional[SearchReservation] = None
@@ -554,8 +672,8 @@ class IpamNetwork(BaseModel):
     parent: Optional[int] = None            # the smallest network holding it (worked out, not stored)
     container: bool                         # it holds other networks, and no addresses of its own
     children: list[int] = []
-    used: Optional[int] = None              # a leaf's used host addresses
-    usable: int
+    used: Optional[int] = None              # a leaf's used host addresses (IPv6: the addresses LiteBlox knows of)
+    usable: int                             # IPv6: a huge number (a /64 holds 2^64), never a count to reach
 
 
 class IpamNetworkDetail(IpamNetwork):

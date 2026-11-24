@@ -1,8 +1,8 @@
 """Write Kea's config to nodes, one at a time, with a check after each and all-or-nothing rollback.
 
-Like bindconf.apply for BIND: back the node up, stage (the agent runs kea-dhcp4 -t),
+Like bindconf.apply for BIND: back the node up, stage (the agent runs kea-dhcp4 -t and kea-dhcp6 -t),
 commit (config-reload; the agent puts the old files back itself if Kea refuses), then
-check that both Kea services still answer and that kea-dhcp4 opened its interface
+check that the Kea services still answer and that kea-dhcp4 (and kea-dhcp6) opened its interface
 sockets. A node that fails rolls back every node this job already changed, and the
 DB change that started it is undone.
 """
@@ -15,8 +15,8 @@ from .. import db, jobs
 from ..nodes import service as nodes
 from ..nodes.client import AgentError
 from . import validate
-from .model import for_node, ha_pair, layout_for
-from .render import file_hashes, render
+from .model import for_node, ha_pair, has_dhcp6, layout_for
+from .render import file_hashes, radvd_interfaces, render
 
 
 class DhcpError(RuntimeError):
@@ -31,14 +31,19 @@ def dhcp_nodes(conn):
     return [n for n in nodes.list_nodes(conn) if n['dhcp']]
 
 
-def running(c):
-    """{service: running} from the node's Kea control sockets; dhcp4 also needs its sockets open."""
+def services_of(node):
+    """The Kea services a DHCP node runs: kea-dhcp6 too once its 6.0 Repair set it up."""
+    return ('dhcp4', 'dhcp6', 'd2') if has_dhcp6(node) else ('dhcp4', 'd2')
+
+
+def running(c, services=('dhcp4', 'd2')):
+    """{service: running} from the node's Kea control sockets; dhcp4 and dhcp6 also need their sockets open."""
     out = {}
-    for service in ('dhcp4', 'd2'):
+    for service in services:
         try:
             answer = c.dhcp_command(service, 'status-get')
             ok = answer.get('result') == 0
-            if service == 'dhcp4' and ok:
+            if service in ('dhcp4', 'dhcp6') and ok:
                 sockets = ((answer.get('arguments') or {}).get('sockets') or {}).get('status', 'ready')
                 ok = sockets == 'ready'
             out[service] = ok
@@ -47,10 +52,10 @@ def running(c):
     return out
 
 
-def ha_state(c):
-    """kea-dhcp4's own HA state (hot-standby, partner-down, waiting...), or None outside a pair."""
+def ha_state(c, service='dhcp4'):
+    """kea-dhcp4's (or kea-dhcp6's) own HA state (hot-standby, partner-down, waiting...), or None outside a pair."""
     try:
-        answer = c.dhcp_command('dhcp4', 'status-get')
+        answer = c.dhcp_command(service, 'status-get')
     except AgentError:
         return None
     ha = ((answer.get('arguments') or {}).get('high-availability') or [{}])[0]
@@ -75,10 +80,19 @@ def live_interfaces(settings, node):
         return c.status().get('interfaces') or []
 
 
+def served_interfaces(files):
+    """Every interface Kea listens on in these files, DHCPv4 and DHCPv6, in order."""
+    out = list(json.loads(files['kea-dhcp4.conf'])['Dhcp4']['interfaces-config']['interfaces'])
+    if 'kea-dhcp6.conf' in files:
+        out += json.loads(files['kea-dhcp6.conf'])['Dhcp6']['interfaces-config']['interfaces']
+    out += radvd_interfaces(files.get('radvd.conf', ''))
+    return list(dict.fromkeys(out))
+
+
 def _guard(node, files, interfaces):
     """The development safeguard, once more right before the files leave LiteBlox."""
     validate.guard_rendered(files)
-    served = json.loads(files['kea-dhcp4.conf'])['Dhcp4']['interfaces-config']['interfaces']
+    served = served_interfaces(files)
     errors = validate.check_interfaces(node, served, interfaces, [])
     if errors:
         raise validate.Invalid(errors)
@@ -161,7 +175,7 @@ def apply_dhcp(settings, conn, node_ids, reason, username, log, change=None, und
             give_up(f"{node['name']}: {e}")
         except AgentError as e:
             give_up(f"{node['name']} is unreachable: {e.message}")
-        served = json.loads(files['kea-dhcp4.conf'])['Dhcp4']['interfaces-config']['interfaces']
+        served = served_interfaces(files)
         log(f"  serves on: {', '.join(served) or 'no interface'}")
         try:
             backups.snapshot_before_change(conn, settings, node, reason, username)
@@ -179,7 +193,7 @@ def apply_dhcp(settings, conn, node_ids, reason, username, log, change=None, und
         state = {}
         for _ in range(settle):
             with nodes.agent_client(settings, node, timeout=30.0) as c:
-                state = running(c)
+                state = running(c, services_of(node))
             if all(state.values()):
                 break
             time.sleep(1)
@@ -188,19 +202,23 @@ def apply_dhcp(settings, conn, node_ids, reason, username, log, change=None, und
             log(f'  ✗ after the change: {down} not answering, or its sockets not open')
             give_up(f"{node['name']}: Kea stopped working after the change ({down}); every node this change "
                     'touched was rolled back')
-        log('  ✓ kea-dhcp4 (sockets open) and D2 answer')
+        log('  ✓ kea-dhcp4' + (', kea-dhcp6' if has_dhcp6(node) else '') + ' (sockets open) and D2 answer')
         record_commit(conn, node['id'], files)
     ids = {n['id'] for n in done}
     if pair.active and ids & {pair.primary_id, pair.standby_id} and {pair.primary_id, pair.standby_id} <= \
             {n['id'] for n in rows}:
         # the pair has to find each other (TLS, the link addresses, clocks) before this counts as done
         log('Failover pair: waiting for both servers to reach hot-standby (this can take a minute or two)')
+        # kea-dhcp6 pairs too once the pair serves a DHCPv6 subnet (and both run it)
+        v6 = for_node(conn, nodes.get_node(conn, pair.primary_id)).ha6 is not None
         states = {}
         for _ in range(ha_wait // 3):
             for n in rows:
                 if n['id'] in (pair.primary_id, pair.standby_id):
                     with nodes.agent_client(settings, n, timeout=15.0) as c:
                         states[n['name']] = ha_state(c)
+                        if v6:
+                            states[f"{n['name']} (DHCPv6)"] = ha_state(c, 'dhcp6')
             if all(s == 'hot-standby' for s in states.values()):
                 break
             time.sleep(3)
@@ -240,7 +258,7 @@ def follow_primary(settings, conn, log, username='liteblox'):
 
 
 def start(settings, node_ids, reason, username, change=None, undo=None, done=None, background=True, node_id=None,
-          skip_unchanged=True):
+          skip_unchanged=True, kind='dhcp config'):
     """apply_dhcp as a job ('dhcp config'); nodes whose config doesn't change are left alone unless
     skip_unchanged=False (a rewrite)."""
     def run(log):
@@ -255,7 +273,7 @@ def start(settings, node_ids, reason, username, change=None, undo=None, done=Non
             log(done or f"✓ {', '.join(names)}: Kea runs the new config")
         finally:
             conn.close()
-    return jobs.start(settings.db_path, 'dhcp config', run, node_id=node_id, username=username, background=background)
+    return jobs.start(settings.db_path, kind, run, node_id=node_id, username=username, background=background)
 
 
 def start_rewrite(settings, node_id, username, reason='rewrite Kea config', background=True):

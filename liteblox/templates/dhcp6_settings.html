@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+{% from 'partials/ui.html' import action_bar %}
+{% from 'partials/settings.html' import setting %}
+{% block title %}DHCPv6 settings · LiteBlox{% endblock %}
+{% macro field(name, placeholder='', rows=None) %}{% if rows %}<textarea id="f-{{ name }}" name="{{ name }}" rows="{{ rows }}" spellcheck="false" placeholder="{{ placeholder }}" {% if not user.is_admin %}readonly{% endif %}>{{ v[name] }}</textarea>{% else %}<input id="f-{{ name }}" name="{{ name }}" value="{{ v[name] }}" placeholder="{{ placeholder }}" spellcheck="false" {% if not user.is_admin %}readonly{% endif %}>{% endif %}{% if errors[name] %}<div class="error-text small">{{ errors[name] }}</div>{% endif %}{% endmacro %}
+{% block content %}
+<h1><a href="/dhcp">DHCP</a> · DHCPv6 settings</h1>
+<p class="muted small page-intro">These apply to every IPv6 subnet; a subnet's own fields override them. Empty: Kea's default. Where clients are registered in DNS is shared with DHCPv4: <a href="/dhcp/settings#dns">DHCP → Settings → DNS registration</a>.</p>
+{% if errors %}<p class="error" role="alert">Not saved: fix the fields marked below.</p>{% endif %}
+<form method="post" action="/dhcp/v6/settings" id="dhcp-settings"
+      data-confirm="Apply these DHCPv6 settings? Each DHCP node is backed up, changed and checked; a failure rolls everything back." data-confirm-ok="Apply">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  <section class="card form-card settings">
+    <h2>Options</h2>
+    {% call setting('DNS servers', 'dns-servers', 'IPv6 addresses.', 'f-dns') %}{{ field('dns', 'none') }}{% endcall %}
+    {% call setting('Search domains', 'domain-search', None, 'f-search') %}{{ field('search') }}{% endcall %}
+    {% call setting('NTP servers', 'sntp-servers', None, 'f-ntp') %}{{ field('ntp') }}{% endcall %}
+    {% call setting('Extra options', 'option-data', 'Kea\'s JSON list of other DHCPv6 options.', 'f-extra_options') %}{{ field('extra_options', '[]', 3) }}{% endcall %}
+  </section>
+  <section class="card form-card settings spaced">
+    <h2>Lifetimes</h2>
+    {% call setting('Preferred for', 'preferred-lifetime', 'Seconds (Kea: 3600).', 'f-preferred_lifetime') %}{{ field('preferred_lifetime') }}{% endcall %}
+    {% call setting('Valid for', 'valid-lifetime', 'Seconds (Kea: 7200).', 'f-valid_lifetime') %}{{ field('valid_lifetime') }}{% endcall %}
+    {% call setting('Renew after', 'renew-timer', None, 'f-renew_timer') %}{{ field('renew_timer') }}{% endcall %}
+    {% call setting('Rebind after', 'rebind-timer', None, 'f-rebind_timer') %}{{ field('rebind_timer') }}{% endcall %}
+  </section>
+  {% if user.is_admin %}
+  <div id="settings-review"></div>
+  {% call action_bar('/dhcp', sticky=True) %}<button type="button" hx-post="/dhcp/v6/settings/preview" hx-include="#dhcp-settings"
+    hx-target="#settings-review" hx-swap="innerHTML show:#settings-review:top">Review changes</button>{% endcall %}
+  {% endif %}
+</form>
+{% endblock %}

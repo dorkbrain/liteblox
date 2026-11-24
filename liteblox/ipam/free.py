@@ -56,6 +56,8 @@ def target(conn, network=None, range_id=None, subnet=None):
         if row is None:
             raise FreeError('no such range', 404)
         r = model.Range.from_row(row)
+        if r.first.version == 6:
+            raise FreeError(NO_V6)
         return Target('range', f'{r.label} ({r.first}-{r.last})', r.first, r.last, network_id=r.network_id)
     if subnet not in (None, ''):
         found = dhcp_subnets(conn)
@@ -72,6 +74,8 @@ def target(conn, network=None, range_id=None, subnet=None):
         raise FreeError('no such network in IPAM', 404)
     if n.container:
         raise FreeError(f'{n.prefix} holds other networks: pick one of them')
+    if n.version == 6:
+        raise FreeError(NO_V6)
     first, last = n.hosts_range()
     skip = [(int(a), int(b)) for s in dhcp_subnets(conn) for a, b in pool_ranges(s)]
     return Target('network', n.label, first, last, skip + _kept_back(conn, n.net), n.id)
@@ -84,6 +88,10 @@ def _kept_back(conn, net):
             for r in model.ranges(conn, n.id) if r.kind in ('reserved', 'infrastructure')]
 
 
+NO_V6 = ('IPv6 has no next free: a /64 has 2^64 addresses. Pick one yourself (or let DHCPv6 or SLAAC hand them out) '
+         'and give it a name with Add DNS or a DHCPv6 reservation')
+
+
 # scanners first: placed on a network for this, they spare the DNS/DHCP servers the probes
 SCANNERS_FIRST = 'ORDER BY (bind = 1 OR dhcp = 1 OR ntp = 1), id'
 
@@ -93,7 +101,7 @@ def node_on(conn, ip):
     for node in conn.execute(f"SELECT * FROM nodes WHERE status = 'ready' {SCANNERS_FIRST}"):
         for prefix in json.loads(node['networks'] or '[]'):
             try:
-                if ip in ipaddress.IPv4Network(prefix):
+                if ip in ipaddress.ip_network(prefix):
                     return node
             except ValueError:
                 pass

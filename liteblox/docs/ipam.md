@@ -2,15 +2,15 @@
 
 **IPAM** shows what uses each address in your networks: the DNS names pointing at it, its DHCP reservation, the lease a client holds on it, what the nodes have seen there, and which addresses are still free. DNS and DHCP are read live from what LiteBlox already knows, so nothing has to be entered twice and nothing drifts.
 
-IPAM covers IPv4 only.
+IPv4 and IPv6 networks sit side by side. An IPv6 network has a page of its own kind, since a /64 is far too big to map: see [IPv6 networks](#ipv6-networks).
 
 ## Networks
 
-IPAM shows only the networks you add, under **IPAM → Add a network** (for example `192.168.10.0/24`, with a name such as *IoT*). The left side of every IPAM page lists them; on a phone it's a picker above the page.
+IPAM shows only the networks you add, under **IPAM → Add a network** (for example `192.168.10.0/24`, with a name such as *IoT*, or `fd00:1:2:100::/64`). The left side of every IPAM page lists them; on a phone it's a picker above the page.
 
-**Not in IPAM yet**, below the list, offers each DHCP subnet and each reverse zone (`10.168.192.in-addr.arpa` is `192.168.10.0/24`) that no network covers yet: **Add** adds it as it is.
+**Not in IPAM yet**, below the list, offers each DHCP subnet (DHCPv6 too) and each reverse zone (`10.168.192.in-addr.arpa` is `192.168.10.0/24`; `ip6.arpa` zones too) that no network covers yet: **Add** adds it as it is.
 
-A network can be from a /8 to a /30. Its prefix doesn't change once it's added: to change it, add the new network and delete the old one.
+An IPv4 network can be from a /8 to a /30, an IPv6 one up to a /126 (not link-local or multicast). Its prefix doesn't change once it's added: to change it, add the new network and delete the old one.
 
 ### Nesting and sites
 
@@ -21,6 +21,8 @@ Networks nest by their prefixes alone. A network inside another goes under it, a
 A network that holds others is a **container**: it holds no addresses or ranges of its own, and its page shows how much of it its networks cover. A site is simply a top-level container with the site's name (*Home*, *Cabin*), with its networks inside.
 
 A network that already has ranges of its own can't take a network inside it (its ranges would have nowhere to go): delete them first.
+
+Each family nests on its own: an IPv6 /48 holds IPv6 /64s, and its page counts in /64s rather than addresses.
 
 ## A network's page
 
@@ -137,16 +139,30 @@ A network no node is on can't be probed: the address comes back marked as not ch
 
 A network's **Settings** can sweep it **hourly** or **daily** (off by default): a node on the network probes every address, 64 at a time at 10 a second, so quiet devices show up in Devices seen. **Sweep now** runs one at once, as a job. Networks bigger than a /22 aren't swept. A device the node talked to in the last few minutes that drops pings may not answer in time, but it's already in Devices seen from the node's neighbour table.
 
+## IPv6 networks
+
+An IPv6 network's page lists the **addresses LiteBlox knows of** in it rather than every address (a /64 has 2<sup>64</sup>), so it has no map, free count, next free, First available or sweep. An address is listed when it has:
+- an **AAAA** record in a zone (or a **PTR** in its `ip6.arpa` zone);
+- a **DHCPv6** reservation or an active lease;
+- an **IPAM record** or an IPAM note;
+- been **seen** by a node: the nodes read their IPv6 neighbour tables (NDP) every minute along with ARP, keeping global and unique-local addresses (never `fe80::`).
+
+Each row has the same columns, states, checks and comment as on an IPv4 network, with **Check** (one ICMPv6 echo and a look at the node's neighbour table), **Name…**, **Add DNS…** (an AAAA record and its PTR) and **Reserve** (from a lease, by its DUID). **Move…** is IPv4 only. The **Known addresses** card counts them by state, and **Delegated prefixes** lists the prefixes Kea delegated (or holds) inside the network. The list on the left shows how many addresses each IPv6 network has.
+
+**Privacy addresses:** most devices make up a new temporary IPv6 address every day or so. Devices seen keeps each one for IPAM's keep time (7 days by default), so a laptop may show a handful at once; they drop off by themselves. Ranges work as on IPv4 (within the network's own family).
+
+Check needs a node with an address in the network. Its ICMPv6 echo is allowed by the same `ping_group_range` as IPv4 ping ([Check](#check-is-it-really-free)); where it isn't, a UDP datagram still makes the node look the address up (neighbour discovery).
+
 ## Devices seen
 
-Every minute the health check reads each node's neighbour (ARP) table, the devices it has talked to lately on its networks, and keeps each address's MACs for 7 days. An address seen in the last 24 hours, with nothing else on it, counts as **in use** (`seen`) on the network pages; one seen earlier shows as free there, with its MAC and when it was last seen, but next free still passes it over until it's dropped. **IPAM → Devices seen** lists one row per MAC, like an ARP monitor: its address, vendor, DNS name, when it was first and last seen and by which node, and the addresses it had before.
+Every minute the health check reads each node's neighbour (ARP) table, and its IPv6 one (NDP) when the node has an IPv6 address of its own, the devices it has talked to lately on its networks, and keeps each address's MACs for 7 days. An address seen in the last 24 hours, with nothing else on it, counts as **in use** (`seen`) on the network pages; one seen earlier shows as free there, with its MAC and when it was last seen, but next free still passes it over until it's dropped. **IPAM → Devices seen** lists one row per MAC, like an ARP monitor: its address (its IPv6 addresses under it), vendor, DNS name, when it was first and last seen and by which node, and the addresses it had before.
 
 What it can and can't see:
 - **A node sees only the networks it's on**, and only devices it has exchanged traffic with: a DHCP server talks to every client that gets a lease, and DNS clients ask it, so most devices show up. A quiet device on a network shows up once something there reaches it.
 - **Last seen** is when the node last had the device confirmed (it answered ARP or sent the node traffic), not when the node last remembered it. A node keeps an entry for a while after the device leaves, and that doesn't count.
 - A network elsewhere (a remote site) has nothing seen.
 
-**Export CSV** downloads the devices the filter shows, with the columns `ip,mac,vendor,label,comment,names,network,first_seen,last_seen,node,source,earlier_ips,flapping,expected,repeater`.
+**Export CSV** downloads the devices the filter shows, with the columns `ip,mac,vendor,label,comment,names,network,first_seen,last_seen,node,source,earlier_ips,flapping,expected,repeater,ipv6`.
 
 **Forget** drops a MAC from an address at once (a device that's gone for good); it comes back if a node sees it again.
 

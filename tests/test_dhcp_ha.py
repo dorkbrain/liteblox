@@ -284,6 +284,8 @@ def test_pair_routes_and_leases(conn, settings, paired_lab, client, make_user, l
     assert job['status'] == 'ok', job['log']
     page = client.get('/dhcp').text
     assert '<span class="pill ready">primary</span>' in page and '<span class="pill ">standby</span>' in page and 'End the pair' in page
+    # Kea leaves out the partner's name while it can't reach it: the pill's title names it anyway
+    assert 'title="ns2: ' in page and 'title="ns1: ' in page and 'title="None' not in page
     # the standby's interfaces follow the primary's
     r = client.post('/dhcp/nodes/2/interfaces', data={'csrf_token': t, 'interfaces': 'ens19'}, follow_redirects=False)
     assert 'is+the+standby' in r.headers['location'] or 'is%20the%20standby' in r.headers['location']

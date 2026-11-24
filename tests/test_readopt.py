@@ -49,7 +49,7 @@ class OldNode(FakeNode):
         out['kea']['installed'] = bool(self.kea_files)
         d4 = json.loads(self.kea_files.get('kea-dhcp4.conf') or '{}').get('Dhcp4') or {}
         out['kea'].update(liteblox=(d4.get('user-context') or {}).get('generated-by') == 'LiteBlox',
-                          subnets=len(d4.get('subnet4') or []))
+                          subnets=len(d4.get('subnet4') or []), dhcp6='kea-dhcp6.conf' in self.kea_files)
         return out
 
     def config(self, secrets=False, files=False):
@@ -489,3 +489,64 @@ def test_viewers_cannot_readopt(conn, old, client, make_user, login):
     login('viewer', 'correct-horse')
     assert client.get('/nodes/readopt').status_code == 403
     assert 'href="/nodes/readopt"' not in client.get('/nodes').text
+
+
+def test_dhcpv6_comes_back(conn, settings, old):
+    from liteblox.dhcp.model import Dhcp6Settings, Reservation6, Subnet6, subnets6
+    old_conn, fakes = old
+    ddns = old_conn.execute("SELECT id FROM zones WHERE name = 'ddns.lab'").fetchone()[0]
+    with old_conn:
+        old_conn.execute('UPDATE nodes SET dhcp6 = 1, radvd = 1')
+        old_conn.execute('UPDATE dhcp4_ha SET port6 = 8012')
+    store.save_settings6(old_conn, Dhcp6Settings(3000, 4000, options={'dns': ['fd00:1:2:100::53']},
+                                                 extra_options=[{'name': 'preference', 'data': '255'}]))
+    store.save_subnet6(old_conn, Subnet6(3, 'fd00:1:2:100::/64', 'ens19', ['fd00:1:2:100::1000 - fd00:1:2:100::1fff'],
+                                         [{'prefix': 'fd00:1:2:f000::/52', 'delegated_len': 60}],
+                                         {'search': ['ddns.lab']}, extra={'rapid-commit': True}, preferred_lifetime=1800,
+                                         ddns=True, ddns_zone_id=ddns, comment='v6', ra=True, ra_slaac=True))
+    store.save_reservation6(old_conn, Reservation6(None, 3, duid='00:01:00:01:aa:bb', ip_address='fd00:1:2:100::50',
+                                                   prefix='fd00:1:2:f010::/60', hostname='router2',
+                                                   options={'dns': ['fd00::53']}))
+    store.save_reservation6(old_conn, Reservation6(None, 3, hw_address='aa:bb:cc:dd:ee:09', hostname='named'))
+    for node in nodes.list_nodes(old_conn):
+        fakes[node['name']].kea_files = dhcp_apply.files_for(old_conn, node)
+        fakes[node['name']].kea_running['dhcp6'] = True
+    d6 = json.loads(fakes['ns1'].kea_files['kea-dhcp6.conf'])['Dhcp6']
+    assert 'https://198.51.100.53:8012/' in json.dumps(d6['hooks-libraries'])      # the pair serves it too
+    assert d6['subnet6'][0]['ddns-conflict-resolution-mode'] == 'check-exists-with-dhcid'   # ddns.lab is shared
+    pv = readopt.preview(conn, settings, ids(conn))
+    assert pv.blockers == [] and pv.diffs == {'ns1': '', 'ns2': ''}
+    readopt.readopt(conn, settings, ids(conn), 'admin', print, transfer=transfer)
+    sub = ('SELECT id, prefix, interface, pools, pd_pools, options, extra, preferred_lifetime, ddns, ddns_suffix '
+           'FROM dhcp6_subnets')
+    assert table(conn, sub) == table(old_conn, sub)
+    res = 'SELECT subnet_id, duid, hw_address, ip_address, prefix, hostname, options FROM dhcp6_reservations ORDER BY id'
+    assert table(conn, res) == table(old_conn, res)
+    sets = 'SELECT preferred_lifetime, valid_lifetime, options FROM dhcp6_settings'
+    assert table(conn, sets) == table(old_conn, sets)
+    extra = 'SELECT extra_options FROM dhcp6_settings'     # Kea's file sorts each option's keys
+    assert json.loads(table(conn, extra)[0][0]) == json.loads(table(old_conn, extra)[0][0])
+    assert ha_pair(conn).port6 == 8012 and store.next_subnet6_id(conn) == 4
+    assert subnets6(conn)[0].ddns_zone == 'ddns.lab'
+    assert subnets6(conn)[0].ra and subnets6(conn)[0].ra_slaac       # from radvd.conf
+    from liteblox.nodes import drift
+    for n in nodes.list_nodes(conn):
+        assert n['dhcp6'] == 1
+        assert drift.dhcp_changed(n, fakes[n['name']].status()) == [] and not dhcp_apply.stale(conn, n)
+
+
+def test_a_dhcpv6_reservation_liteblox_does_not_write_blocks(conn, settings, old):
+    from liteblox.dhcp.model import Subnet6
+    old_conn, fakes = old
+    with old_conn:
+        old_conn.execute('UPDATE nodes SET dhcp6 = 1')
+    store.save_subnet6(old_conn, Subnet6(3, 'fd00:1:2:100::/64', 'ens19', ['fd00:1:2:100::1000 - fd00:1:2:100::1fff']))
+    for node in nodes.list_nodes(old_conn):
+        files = dhcp_apply.files_for(old_conn, node)
+        conf = json.loads(files['kea-dhcp6.conf'])
+        conf['Dhcp6']['subnet6'][0]['reservations'] = [{'duid': '00:01:02', 'ip-addresses': ['fd00:1:2:100::5',
+                                                                                             'fd00:1:2:100::6']}]
+        files['kea-dhcp6.conf'] = json.dumps(conf, indent=2, sort_keys=True) + '\n'
+        fakes[node['name']].kea_files = files
+    pv = readopt.preview(conn, settings, ids(conn))
+    assert any('DHCPv6 reservation 00:01:02' in b for b in pv.blockers)

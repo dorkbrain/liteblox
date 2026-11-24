@@ -19,7 +19,7 @@ def node_for(conn, network):
     from .free import node_on
     if network.sweep_node_id:
         row = conn.execute("SELECT * FROM nodes WHERE id = ? AND status = 'ready'", (network.sweep_node_id,)).fetchone()
-        if row is not None and any(ipaddress.IPv4Network(p).overlaps(network.net)
+        if row is not None and any(':' not in p and ipaddress.IPv4Network(p).overlaps(network.net)
                                    for p in json.loads(row['networks'] or '[]')):
             return row
     return node_on(conn, network.net.network_address + 1)
@@ -27,6 +27,8 @@ def node_for(conn, network):
 
 def problem(conn, network):
     """Why the network can't be swept, or None."""
+    if network.version == 6:
+        return 'an IPv6 network is never swept (a /64 has 2^64 addresses): the nodes\' neighbour tables show what\'s there'
     if network.container:
         return f'{network.prefix} holds other networks: sweep those'
     if network.net.prefixlen < LARGEST:

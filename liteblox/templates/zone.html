@@ -97,17 +97,17 @@
 {% if stale_view %}{% set sv = stale_view %}
 <section class="card spaced" id="stale">
   <h2>DHCP names <a class="more" href="/zones/{{ zone_name }}">Close</a></h2>
-  <p class="muted small">The names Kea registered here (an A record with a DHCID). One is <strong>stale</strong> when no live
+  <p class="muted small">The names Kea registered here (an A or AAAA record with a DHCID). One is <strong>stale</strong> when no live
     lease and no reservation has its name or address, and its lease ended more than {{ sv.grace|duration }} ago{% if sv.grace == sv.default %} (the longest lease time){% endif %}.
     Reclaiming them on a schedule is {% if zone_row.reclaim %}<strong>on</strong>{% if zone_row.reclaim_checked_at %}, last checked {{ zone_row.reclaim_checked_at|reltime }}{% endif %}{% else %}off{% endif %}{% if user.is_admin %} (<a href="/zones/{{ zone_name }}/settings#reclaim">Settings</a>){% endif %}.
     <a href="/help/dynamic#stale-dhcp-names">More</a></p>
   {% if done %}<p class="ok-line small"><span class="dot ok" aria-hidden="true"></span>{{ done }}.</p>{% endif %}
   {% if zone_row.reclaim and zone_row.reclaim_note %}<p class="notice small">The last check {{ 'held back' if zone_row.reclaim_note.startswith('hold') else 'was skipped' }}: {{ zone_row.reclaim_note.split(': ', 1)[-1] }}.</p>{% endif %}
   {% if sv.trouble %}<p class="notice small">Nothing is called stale while the leases can't be trusted: {{ sv.trouble }}.</p>{% endif %}
-  {% if sv.names %}
-  <form method="post" action="/zones/{{ zone_name }}/stale" data-confirm="Delete the ticked names? Their A, DHCID and PTR records go now." data-confirm-ok="Delete">
+  {% if sv.names or sv.ptrs %}
+  <form method="post" action="/zones/{{ zone_name }}/stale" data-confirm="Delete the ticked records? A name's A, AAAA, DHCID and PTR records go now, and each ticked PTR with its DHCID." data-confirm-ok="Delete">
     <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
-    <div class="table-wrap"><table class="stale-names">
+    {% if sv.names %}<div class="table-wrap"><table class="stale-names">
       <thead><tr>{% if user.is_admin %}<th class="select"></th>{% endif %}<th>Name</th><th>Address</th><th></th><th>Why</th></tr></thead>
       <tbody>{% for i in sv.names %}
       <tr class="{{ 'stale' if i.stale else 'kept' }}">
@@ -117,9 +117,23 @@
         <td>{% if i.stale %}<span class="pill warn">stale</span>{% else %}<span class="pill">kept</span>{% endif %}</td>
         <td class="small">{{ i.why }}</td>
       </tr>{% endfor %}</tbody>
-    </table></div>
-    {% if user.is_admin %}<div class="inline-actions spaced"><button type="submit" class="danger">Delete the ticked names</button>
-      <span class="muted small">{{ sv.stale|length }} stale of {{ sv.names|length }}; you can tick a kept one too</span></div>{% endif %}
+    </table></div>{% else %}<p class="muted">Kea hasn't registered any names here.</p>{% endif %}
+    {% if sv.ptrs %}
+    <h3 id="stale-ptrs">PTR records without a name</h3>
+    <p class="muted small">PTR records Kea made in a reverse zone LiteBlox holds, pointing at a name here that no longer has an A or AAAA record for the address. Kea before 3.3.1 leaves one behind when one family of a dual-stack name goes. One is <strong>stale</strong> when no live lease and no reservation has its address and it has been that way longer than {{ sv.grace|duration }}. <a href="/help/dynamic#ptr-records-without-a-name">More</a></p>
+    <div class="table-wrap"><table class="stale-names">
+      <thead><tr>{% if user.is_admin %}<th class="select"></th>{% endif %}<th>Address</th><th>Points to</th><th></th><th>Why</th></tr></thead>
+      <tbody>{% for i in sv.ptrs %}
+      <tr class="{{ 'stale' if i.stale else 'kept' }}">
+        {% if user.is_admin %}<td class="select"><input type="checkbox" name="ptrs" value="{{ i.owner }}" aria-label="Delete the PTR for {{ i.address }}" {% if i.stale %}checked{% endif %}></td>{% endif %}
+        <td><a href="/search?q={{ i.address }}#address"><code>{{ i.address }}</code></a> <span class="muted small">in <a href="/zones/{{ i.rzone }}">{{ i.rzone }}</a></span></td>
+        <td><code>{{ i.target }}</code></td>
+        <td>{% if i.stale %}<span class="pill warn">stale</span>{% else %}<span class="pill">kept</span>{% endif %}</td>
+        <td class="small">{{ i.why }}</td>
+      </tr>{% endfor %}</tbody>
+    </table></div>{% endif %}
+    {% if user.is_admin %}<div class="inline-actions spaced"><button type="submit" class="danger">Delete the ticked records</button>
+      <span class="muted small">{{ sv.stale|length }} stale of {{ sv.names|length }} name{{ '' if sv.names|length == 1 else 's' }}{% if sv.ptrs %}, {{ sv.stale_ptrs|length }} stale of {{ sv.ptrs|length }} PTR record{{ '' if sv.ptrs|length == 1 else 's' }}{% endif %}; you can tick a kept one too</span></div>{% endif %}
   </form>
   {% else %}<p class="muted">Kea hasn't registered any names here.</p>{% endif %}
 </section>

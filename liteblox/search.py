@@ -1,7 +1,7 @@
 """Search: one query across every zone's records, the DHCP reservations and leases, the zones and subnets.
 
-A query is read once as an IPv4 address, a network, a MAC (full or partial) or plain text, and each kind
-matches what it can: an address matches A records and PTR owners exactly, text matches names, values and
+A query is read once as an IP address (IPv4 or IPv6), a network, a MAC or DUID (full or partial) or plain text, and
+each kind matches what it can: an address matches A/AAAA records and PTR owners exactly, text matches names, values and
 comments as a substring. Static zones are searched as the grid shows them (the draft if there is one);
 dynamic zones and leases are read live, falling back to the zone's history when its primary doesn't answer.
 
@@ -37,6 +37,7 @@ TRANSFER_TIMEOUT = 5.0
 NAME_TYPES = ('CNAME', 'DNAME', 'NS', 'PTR', 'MX', 'SRV')       # their last field is a name
 
 _MAC = re.compile(r'(?i)^(?:[0-9a-f]{1,2}(?:[:-][0-9a-f]{1,2})+|[0-9a-f]{4}(?:\.[0-9a-f]{4})+|[0-9a-f]{12})$')
+_HEX_PAIRS = re.compile(r'(?i)^[0-9a-f]{2}(?::[0-9a-f]{2}){5,}$')
 KINDS = {'ip': 'an IP address', 'network': 'a network', 'mac': 'a MAC address', 'text': 'text'}
 
 
@@ -44,13 +45,15 @@ KINDS = {'ip': 'an IP address', 'network': 'a network', 'mac': 'a MAC address', 
 class Query:
     text: str
     kind: str                       # ip, network, mac, text
-    ip: Optional[ipaddress.IPv4Address] = None
-    network: Optional[ipaddress.IPv4Network] = None
+    ip: Optional[ipaddress._BaseAddress] = None           # IPv4Address or IPv6Address
+    network: Optional[ipaddress._BaseNetwork] = None
     mac: str = ''                   # bare lowercase hex
     needle: str = ''                # lowercase, no trailing dot
 
     @property
     def label(self):
+        if self.kind == 'mac' and len(self.mac) > 12:     # longer than a MAC: only a DUID
+            return 'a DUID'
         return KINDS[self.kind]
 
     @property
@@ -66,13 +69,15 @@ def parse(q):
     needle = text.lower().rstrip('.') or text.lower()
     if '/' in text:
         try:
-            return Query(text, 'network', network=ipaddress.IPv4Network(text, strict=False), needle=needle)
+            return Query(text, 'network', network=ipaddress.ip_network(text, strict=False), needle=needle)
         except ValueError:
             pass
-    try:
-        return Query(text, 'ip', ip=ipaddress.IPv4Address(text), needle=needle)
-    except ValueError:
-        pass
+    # 00:01:00:01:aa:bb:cc:dd parses as an IPv6 address too, but every group of two digits is a DUID's (or a MAC's)
+    if not _HEX_PAIRS.match(text):
+        try:
+            return Query(text, 'ip', ip=ipaddress.ip_address(text.strip('[]')), needle=needle)
+        except ValueError:
+            pass
     # 'cafe' or 'beef' alone is a name more often than a MAC: a MAC has separators, or all 12 digits
     if _MAC.match(text) and (not text.isalnum() or len(text) == 12):
         return Query(text, 'mac', mac=bare_mac(text, partial=True), needle=needle)
@@ -98,7 +103,7 @@ class Rec:
     rtype: str
     rdata: str
     comment: str
-    address: Optional[ipaddress.IPv4Address]        # an A record's address, or a PTR owner's
+    address: Optional[ipaddress._BaseAddress]       # an A or AAAA record's address, or a PTR owner's
     target: str                     # a name-valued record's target, absolute, lowercase, no trailing dot
 
 
@@ -114,9 +119,11 @@ def _index(text, origin):
         address = None
         if r.rtype == 'A':
             address = _v4(r.rdata)
+        elif r.rtype == 'AAAA':
+            address = _v6(r.rdata)
         elif r.rtype == 'PTR':
             try:
-                address = _v4(dns.reversename.to_address(r.name))
+                address = _ip(dns.reversename.to_address(r.name))
             except (dns.exception.DNSException, ValueError):
                 pass
         target = ''
@@ -130,16 +137,29 @@ def _index(text, origin):
     return tuple(out), None
 
 
-def _v4(text):
+def _ip(text):
+    """An IPv4Address or IPv6Address, or None."""
     try:
-        a = ipaddress.ip_address(str(text).strip())
+        return ipaddress.ip_address(str(text or '').strip())
     except ValueError:
         return None
-    return a if a.version == 4 else None
+
+
+def _v4(text):
+    a = _ip(text)
+    return a if a is not None and a.version == 4 else None
+
+
+def _v6(text):
+    a = _ip(text)
+    return a if a is not None and a.version == 6 else None
 
 
 def _word(ip):
-    """A pattern for an address inside text (an SPF record, a comment) that 10.0.0.1 doesn't match in 10.0.0.10."""
+    """A pattern for an address inside text (an SPF record, a comment) that 10.0.0.1 doesn't match in 10.0.0.10
+    (nor fd00::1 in fd00::10)."""
+    if ip.version == 6:
+        return re.compile(r'(?i)(?<![0-9a-f:])' + re.escape(str(ip)) + r'(?![0-9a-f:])')
     return re.compile(r'(?<![\d.])' + re.escape(str(ip)) + r'(?![\d]|\.\d)')
 
 
@@ -202,8 +222,9 @@ def search(conn, settings, q, limit=LIMIT, transfer=None):
     _records(conn, settings, res, zones, transfer)
     _zones(res, zones)
     subnets = dhcp_model.subnets(conn)
-    _reservations(res, subnets)
-    _subnets(res, subnets)
+    subnets6 = dhcp_model.subnets6(conn)
+    _reservations(res, subnets + subnets6)
+    _subnets(res, subnets + subnets6)
     from .modules import enabled
     ipam_on = enabled(conn)['ipam']
     if ipam_on and query.kind == 'text' and query.needle:
@@ -218,11 +239,15 @@ def search(conn, settings, q, limit=LIMIT, transfer=None):
         found, errors = lease_mod.serving_leases(settings, conn)
         res.errors += [f"Leases: {e}" for e in errors]
         _leases(res, found, subnets)
+        if subnets6 and (query.kind != 'ip' or query.ip.version == 6):
+            found, errors = lease_mod.serving_leases(settings, conn, family=6)
+            res.errors += [f"DHCPv6 leases: {e}" for e in errors]
+            _leases(res, found, subnets6)
         _named(res, subnets)
     elif lease_mod.serving(conn):
         res.skipped.append('leases')
     if query.kind == 'ip':
-        res.address = address(res, subnets, [z['name'] for z in zones],
+        res.address = address(res, subnets if query.ip.version == 4 else subnets6, [z['name'] for z in zones],
                               **(_learned(conn, settings, query.ip) if ipam_on else {}))
     return res
 
@@ -318,7 +343,14 @@ def _zones(res, zones):
 
 
 def reverse_network(zone_name):
-    """The IPv4 network a reverse zone covers (1.168.192.in-addr.arpa → 192.168.1.0/24), or None."""
+    """The network a reverse zone covers (1.168.192.in-addr.arpa → 192.168.1.0/24, 8.b.d.0.1.0.0.2.ip6.arpa →
+    2001:db8::/32), or None."""
+    if zone_name.endswith('.ip6.arpa'):
+        nibbles = zone_name[:-len('.ip6.arpa')].split('.')
+        if not 1 <= len(nibbles) <= 32 or not all(len(n) == 1 and n in '0123456789abcdef' for n in nibbles):
+            return None
+        digits = ''.join(reversed(nibbles)).ljust(32, '0')
+        return ipaddress.IPv6Network((int(digits, 16), 4 * len(nibbles)))
     if not zone_name.endswith('.in-addr.arpa'):
         return None
     labels = zone_name[:-len('.in-addr.arpa')].split('.')
@@ -329,22 +361,27 @@ def reverse_network(zone_name):
 
 
 def _mac_hit(q, mac):
+    """A MAC (or a DUID: hex pairs too) matches a MAC-like query or text."""
+    if not mac:
+        return False
     if q.kind == 'mac':
         return q.mac in bare_mac(mac)
-    return q.kind == 'text' and q.needle in (mac or '').lower()
+    return q.kind == 'text' and q.needle in mac.lower()
 
 
 def _reservations(res, subnets):
     q = res.query
     for s in subnets:
         for r in s.reservations:
-            ip = _v4(r.ip_address)
+            ip = _ip(r.ip_address)
+            prefix = _net(getattr(r, 'prefix', ''))       # a DHCPv6 reservation's delegated prefix
             if q.kind == 'ip':
-                hit = ip == q.ip
+                hit = ip == q.ip or (prefix is not None and q.ip in prefix)
             elif q.kind == 'network':
-                hit = ip is not None and ip in q.network
+                hit = (ip is not None and ip in q.network) or (prefix is not None and _overlaps(prefix, q.network))
             else:
-                hit = (_mac_hit(q, r.hw_address) or q.needle in r.ip_address
+                hit = (_mac_hit(q, r.hw_address) or _mac_hit(q, getattr(r, 'duid', '')) or q.needle in r.ip_address
+                       or q.needle in (getattr(r, 'prefix', '') or '')
                        or q.needle in (r.hostname or '').lower() or q.needle in (r.comment or '').lower())
             if hit:
                 res.reservations.add({'subnet': s, 'r': r}, res.limit)
@@ -358,6 +395,8 @@ def _named(res, subnets):
     have = {id(h['r']) for h in res.reservations.hits}
     for h in res.leases.hits:
         x = h['lease']
+        if 'duid' in x:         # DHCPv6: subnets are numbered apart from IPv4's
+            continue
         sr = named.get((x['subnet_id'], x['mac'].lower())) if x['state'] == 'active' else None
         if sr and id(sr[1]) not in have:
             have.add(id(sr[1]))
@@ -369,13 +408,14 @@ def _leases(res, found, subnets):
     by_id = {s.id: s for s in subnets}
     full_mac = q.kind == 'mac' and len(q.mac) == 12
     for node, lease in found:
-        ip = _v4(lease['ip'])
+        ip = _ip(lease['ip'])
+        prefix = _net(lease.get('prefix'))       # a delegated prefix (DHCPv6)
         if q.kind == 'ip':
-            hit = ip == q.ip
+            hit = ip == q.ip if prefix is None else q.ip in prefix
         elif q.kind == 'network':
-            hit = ip is not None and ip in q.network
+            hit = ip is not None and (ip in q.network if prefix is None else _overlaps(prefix, q.network))
         else:
-            hit = (_mac_hit(q, lease['mac']) or q.needle in lease['ip']
+            hit = (_mac_hit(q, lease['mac']) or _mac_hit(q, lease.get('duid')) or q.needle in lease['ip']
                    or q.needle in (lease['hostname'] or '').lower())
         # expired and released leases linger in Kea: only an exact address or MAC shows them
         if hit and (lease['state'] == 'active' or q.kind == 'ip' or full_mac):
@@ -385,14 +425,13 @@ def _leases(res, found, subnets):
 def _subnets(res, subnets):
     q = res.query
     for s in subnets:
-        try:
-            net = ipaddress.IPv4Network(s.prefix, strict=False)
-        except ValueError:
+        net = _net(s.prefix)
+        if net is None:
             continue
         if q.kind == 'ip':
             hit = q.ip in net
         elif q.kind == 'network':
-            hit = net.overlaps(q.network)
+            hit = _overlaps(net, q.network)
         else:
             hit = q.needle in s.prefix or q.needle in (s.comment or '').lower()
         if hit:
@@ -408,15 +447,18 @@ def address(res, subnets, zone_names, seen=(), changes=(), flapping=None, networ
     range, ipam, rdns, resolver, checks: [(level, text, link)]}."""
     ip = res.query.ip
     hits = res.records.hits
-    names = [h for h in hits if h['rec'].rtype == 'A' and h['rec'].address == ip]
+    names = [h for h in hits if h['rec'].rtype in ('A', 'AAAA') and h['rec'].address == ip]
     ptrs = [h for h in hits if h['rec'].rtype == 'PTR' and h['rec'].address == ip]
-    rzone = ptr.reverse_zone_for(str(ip), [n for n in zone_names if n.endswith('.in-addr.arpa')])
-    reservations = [h['r'] for h in res.reservations.hits]
-    held = sorted(res.leases.hits, key=lambda h: h['lease']['state'] != 'active')
+    rzone = ptr.reverse_zone_for(str(ip), [n for n in zone_names if n.endswith('.in-addr.arpa' if ip.version == 4
+                                                                              else '.ip6.arpa')])
+    reservations = [h['r'] for h in res.reservations.hits if not h['r'].ip_address or _ip(h['r'].ip_address) == ip]
+    held = sorted((h for h in res.leases.hits if _ip(h['lease']['ip']) == ip and not h['lease'].get('prefix')),
+                  key=lambda h: h['lease']['state'] != 'active')
     lease = held[0]['lease'] if held else None
     active = lease if lease and lease['state'] == 'active' else None
     subnet = next((s for s in subnets if _contains(s.prefix, ip)), None)
-    in_pool = bool(subnet) and any(first <= ip <= last for first, last in lease_mod.pool_ranges(subnet))
+    pools = (lease_mod.pool_ranges6 if ip.version == 6 else lease_mod.pool_ranges)(subnet) if subnet else []
+    in_pool = any(first <= ip <= last for first, last in pools)
     r = reservations[0] if reservations else None
     used = names or reservations or active or ipam
     latest = seen[0] if seen else None
@@ -431,10 +473,19 @@ def address(res, subnets, zone_names, seen=(), changes=(), flapping=None, networ
 
 
 def _contains(prefix, ip):
+    net = _net(prefix)
+    return net is not None and ip in net
+
+
+def _net(text):
     try:
-        return ip in ipaddress.IPv4Network(prefix, strict=False)
+        return ipaddress.ip_network(str(text).strip(), strict=False) if text else None
     except ValueError:
-        return False
+        return None
+
+
+def _overlaps(a, b):
+    return a.version == b.version and a.overlaps(b)
 
 
 # ── for the page and the API ───────────────────────────────────────────────────
@@ -478,14 +529,21 @@ def to_dict(res):
 
     def reservation(h):
         r = h['r']
-        return {'subnet': h['subnet'].prefix, 'subnet_id': h['subnet'].id, 'id': r.id, 'ip': r.ip_address,
-                'mac': r.hw_address, 'hostname': r.hostname, 'comment': r.comment}
+        out = {'subnet': h['subnet'].prefix, 'subnet_id': h['subnet'].id, 'id': r.id, 'ip': r.ip_address,
+               'mac': r.hw_address, 'hostname': r.hostname, 'comment': r.comment, 'family': h['subnet'].family}
+        if h['subnet'].family == 6:
+            out.update(duid=r.duid, prefix=r.prefix)
+        return out
 
     def lease(h):
         x = h['lease']
-        return {'ip': x['ip'], 'mac': x['mac'], 'hostname': x['hostname'], 'state': x['state'],
-                'expires': datetime.fromtimestamp(x['expires'], timezone.utc).isoformat(timespec='seconds'),
-                'subnet_id': x['subnet_id'], 'node': h['node']['name'] if h['node'] else None}
+        out = {'ip': x['ip'], 'mac': x['mac'], 'hostname': x['hostname'], 'state': x['state'],
+               'expires': datetime.fromtimestamp(x['expires'], timezone.utc).isoformat(timespec='seconds'),
+               'subnet_id': x['subnet_id'], 'node': h['node']['name'] if h['node'] else None,
+               'family': 6 if 'duid' in x else 4}
+        if 'duid' in x:
+            out.update(duid=x['duid'], type=x['type'], prefix=x['prefix'])
+        return out
 
     out = {'query': q.text, 'kind': q.kind,
            'records': group(res.records, rec), 'reservations': group(res.reservations, reservation),
@@ -493,7 +551,7 @@ def to_dict(res):
            'zones': group(res.zones, lambda h: {'name': h['zone']['name'], 'kind': h['zone']['kind'],
                                                 'dynamic': bool(h['zone']['dynamic'])}),
            'subnets': group(res.subnets, lambda h: {'id': h['subnet'].id, 'prefix': h['subnet'].prefix,
-                                                    'comment': h['subnet'].comment}),
+                                                    'comment': h['subnet'].comment, 'family': h['subnet'].family}),
            'devices': group(res.devices, lambda d: {'mac': d['mac'], 'label': d['label'], 'comment': d['comment']}),
            'ipam': group(res.ipam, lambda r: {'ip': r['ip'], 'name': r['name'], 'mac': r['mac'] or '',
                                                'comment': r['comment']}),

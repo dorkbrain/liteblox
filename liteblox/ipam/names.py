@@ -27,14 +27,14 @@ def clean_name(name):
 
 def _ip(ip):
     try:
-        return str(ipaddress.IPv4Address(str(ip).strip()))
+        return str(ipaddress.ip_address(str(ip).strip()))
     except ValueError:
-        raise IpamError({'ip': f'{ip} is not an IPv4 address'})
+        raise IpamError({'ip': f'{ip} is not an IP address'})
 
 
 def records(conn):
-    """{IPv4Address: row} of every IPAM record."""
-    return {ipaddress.IPv4Address(r['ip']): dict(r)
+    """{IPv4Address or IPv6Address: row} of every IPAM record."""
+    return {ipaddress.ip_address(r['ip']): dict(r)
             for r in conn.execute("SELECT * FROM ipam_assignments WHERE kind = 'ipam'")}
 
 
@@ -98,7 +98,8 @@ def matching(conn, query):
     name or comment."""
     from ..search import bare_mac
     out = []
-    for ip, r in sorted(records(conn).items()):
+    from ..addrs import sort_key
+    for ip, r in sorted(records(conn).items(), key=lambda x: sort_key(x[0])):
         if query.kind == 'ip':
             hit = ip == query.ip
         elif query.kind == 'network':

@@ -134,3 +134,16 @@ def test_every_dark_rule_has_a_toggle_twin(name):
                 assert s.strip().startswith(':root:not([data-theme="light"])'), s
     auto, forced = dark_pairs(css)
     assert auto and auto == forced
+
+
+def test_every_settings_tab_is_wide():
+    """The Settings tabs share one width, so switching tabs doesn't jump."""
+    pages = [p for p in (ROOT / 'templates').glob('*.html') if 'settings_tabs.html' in p.read_text()]
+    assert len(pages) >= 6
+    assert [p.name for p in pages if '{% block main_class %}wide{% endblock %}' not in p.read_text()] == []
+
+
+@pytest.mark.parametrize('path', ['/settings/modules', '/settings/ipam', '/settings/https', '/settings/acls'])
+def test_settings_tabs_render_wide(client, make_user, login, path):
+    login(*make_user('admin', 'admin-password', 'admin'))
+    assert '<main class="wide">' in client.get(path).text

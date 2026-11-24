@@ -23,7 +23,7 @@ Names are lowercase letters, digits, `_ . -` (up to 32); passwords need at least
 | Command | Does |
 |---|---|
 | `liteblox node add NAME HOST [--ssh-port 22] [--agent-port 8530] [--yes] [--no-bind]` | read the node's SSH host key, show its fingerprint, and pin it after you confirm (`--yes` skips the question). `--no-bind`: a node without BIND (DHCP or Time only, or a [scanner](/help/modules#scanner-nodes)); always so with the DNS module off |
-| `liteblox node bootstrap NAME --ssh-user USER [--use-ssh-keys] [--install-bind] [--no-fix-permissions] [--no-takeover] [--dhcp] [--ntp] [--no-bind \| --bind]` | set up (or repair/upgrade) the agent, then take over a server with the stock configuration. Prompts for the SSH password unless `--use-ssh-keys`, which uses the ssh-agent or `~/.ssh` keys of whoever runs the command. Unlike the web form, BIND is installed only with `--install-bind`. `--dhcp` also [sets up Kea](/help/dhcp#setting-up-dhcp-on-a-node) and `--ntp` [chrony](/help/ntp#setting-it-up-on-a-node) (a repair without them keeps each as it is). `--no-bind` / `--bind` change whether the node runs BIND for LiteBlox, while it serves no zones and isn't taken over (BIND itself isn't removed). |
+| `liteblox node bootstrap NAME --ssh-user USER [--use-ssh-keys] [--install-bind] [--no-fix-permissions] [--no-takeover] [--dhcp] [--radvd] [--ntp] [--no-bind \| --bind]` | set up (or repair/upgrade) the agent, then take over a server with the stock configuration. Prompts for the SSH password unless `--use-ssh-keys`, which uses the ssh-agent or `~/.ssh` keys of whoever runs the command. Unlike the web form, BIND is installed only with `--install-bind`. `--dhcp` also [sets up Kea](/help/dhcp#setting-up-dhcp-on-a-node), `--radvd` [radvd](/help/ipv6#router-advertisements-from-liteblox) for router advertisements, and `--ntp` [chrony](/help/ntp#setting-it-up-on-a-node) (a repair without them keeps each as it is). `--no-bind` / `--bind` change whether the node runs BIND for LiteBlox, while it serves no zones and isn't taken over (BIND itself isn't removed). |
 | `liteblox node takeover NAME [--yes]` | print the [takeover](/help/existing-servers#2-take-over-a-server-with-its-own-config) preview, then take the node over after you confirm |
 | `liteblox node readopt NAME... [--yes]` | after LiteBlox's own data was lost: print the [re-adopt](/help/backups#disaster-recovery) preview for these nodes, then rebuild LiteBlox's data from them after you confirm |
 | `liteblox node settings NAME` | print the node's options as LiteBlox writes them |
@@ -119,7 +119,9 @@ Tokens are also managed on the **Users** tab (admins, for any user) and on **My 
 | 22/tcp | each node | setup and agent upgrades |
 | 53/udp+tcp | each node | DNS: clients, transfers and NOTIFY between nodes, and LiteBlox's serial checks, probes and dynamic-zone reads and updates |
 | 67/udp | DHCP nodes, on the interfaces they serve | DHCP clients |
+| 547/udp | DHCP nodes with an IPv6 subnet, on the interfaces they serve | DHCPv6 clients |
 | 8001/tcp | the failover pair, on each node's link address | the two Kea servers (TLS both ways); the port can be changed |
+| 8002/tcp | the failover pair, on each node's link address | the two kea-dhcp6 servers, once there's an IPv6 subnet; the port can be changed |
 | 123/udp | nodes that serve time, from the networks they serve | NTP clients (and each node's own chrony, outbound, to its sources) |
 | 53001/udp | each DHCP node, 127.0.0.1 only | kea-dhcp4 handing name registrations to its DDNS service (D2), which sends them to the DNS primary on 53 |
 
@@ -136,7 +138,8 @@ Tokens are also managed on the **Users** tab (admins, for any user) and on **My 
 | `/var/lib/bind/liteblox/sec/` | secondaries' copies (plain text, readable) |
 | `/var/lib/bind/liteblox/jnl/` | the primary's journals of static zones, for incremental transfers |
 | `/etc/bind/pre-liteblox/<time>/` | the node's own configuration, moved aside at takeover |
-| `/etc/kea/kea-dhcp4.conf`, `kea-dhcp-ddns.conf` | Kea's configuration, written by LiteBlox on a DHCP node (mode 0640; the second holds the DNS registration key) |
+| `/etc/kea/kea-dhcp4.conf`, `kea-dhcp6.conf`, `kea-dhcp-ddns.conf` | Kea's configuration, written by LiteBlox on a DHCP node (mode 0640; the last holds the DNS registration key) |
+| `/etc/liteblox-radvd/radvd.conf` | the router advertisement config LiteBlox writes on a node with radvd; `liteblox-radvd.path` checks it and puts it in place as `/etc/radvd.conf`, running radvd only while it names an interface |
 | `/etc/kea/tls/` | the failover link's certificate, key and the LiteBlox CA certificate |
 | `/etc/kea/pre-liteblox/<time>/` | the Kea package's own configuration, moved aside at setup |
 | `/var/lib/kea/kea-leases4.csv` | the leases (Kea's own file) |

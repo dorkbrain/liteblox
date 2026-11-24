@@ -13,6 +13,20 @@ LiteBlox is an independent project, not affiliated with or endorsed by Infoblox.
 
 ## The story so far
 
+**6.0.0** (2026-11-24): **IPv6**
+- There's no 5.x: the version jumps to 6.0 so the number matches the feature, and 4.x was the last IPv4-only line.
+- DHCPv6 on the same servers as DHCP: address pools, delegated prefixes for routers behind a client, reservations by DUID or MAC, clients registered in DNS (AAAA and the ip6.arpa PTR), and the failover pair, on its own port. A client asking for a name over both families gets an A and an AAAA under that one name, where the Kea version allows it.
+- Router advertisements are normally the router's job, and LiteBlox leaves them there by default. For a network with no router sending them, a subnet can have its DHCP servers send them, and they never offer a default route. My home LAN runs no IPv6, so all of this was tested on the lab VLAN only, with advertisements switched on only during a test and off again right after.
+- IPAM takes IPv6 networks. They're far too big for an address map, so their page lists every address LiteBlox knows of there: DNS, DHCPv6, IPAM's own records, and what the servers see through neighbour discovery, with Check (ICMPv6) and Add DNS. Search, the API, `lbcli.py`, the CSV exports and NTP all work over IPv6 too.
+- Before releasing I upgraded a lab node in place from Ubuntu 24.04 to 26.04, since I'd been seeing differences between Kea versions. It found three real problems, fixed here: the new BIND package no longer ships a file LiteBlox's `named.conf` included, which stopped BIND's upgrade halfway (LiteBlox now writes the config without it by itself, and Needs attention says when a node's BIND config doesn't check); a Kea package update quietly takes away LiteBlox's write access to `/etc/kea`, any Kea update and not just this one; and the radvd package switched itself back on. Afterwards, a failover pair of Kea 2.6 on one node and Kea 3.0 on the other ran in hot-standby for both IPv4 and IPv6.
+- Stale DHCP names now cover IPv6. Kea versions before 3.3.1 leave the PTR record behind when one family of a dual-stack name goes, and they showed up after every IPv6 release in the lab, so a dynamic zone's Stale names now lists those leftovers too and the hourly reclaim removes them.
+- After updating, each node needs one Repair, for the DHCPv6 server and the new services.
+
+**4.8.0** (2026-11-23): **Ubuntu Server nodes, and interface names per server**
+- In 4.7.2 the Pi's VLAN interface had to be renamed to match the VM it was paired with. Now a failover pair matches the two servers' interfaces by network, so one can serve on `ens19` and the other on `eth0.100`, and the review shows which stands for which.
+- I rebuilt one lab node as a minimal Ubuntu Server 24.04 install, and LiteBlox set it up as a full node: BIND, Kea, chrony and IPAM. Ubuntu 24.04 ships older Kea and chrony than Debian 13, so LiteBlox now writes each node's configs for the versions it actually has.
+- When a package isn't in the node's package sources (Ubuntu's `universe` turned off, say), setup now names it and says to turn on the repository that has it, instead of showing a page of apt output.
+
 **4.7.2** (2026-11-23): **A Raspberry Pi as a node**
 - LiteBlox already ran on a Pi as the web console; now the Pi is proven as a node too. I booted a Pi 4B from a USB stick with Raspberry Pi OS Lite (64-bit) and let LiteBlox set it up over SSH with a password, the same as any new server: BIND, Kea and chrony installed and running on ARM.
 - To get it onto the lab's private DHCP network, the Proxmox bridge for that network now goes out to my switch as VLAN 100, and the Pi joins it on its one network port as a VLAN. That turned the lab network into a trunked one, still kept apart from the rest of my LAN.

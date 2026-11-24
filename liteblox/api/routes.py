@@ -57,12 +57,13 @@ def _node(n):
 
 
 @router.get('/search', response_model=models.Search, tags=['search'], summary='Search zones and DHCP')
-def search_get(request: Request, q: str = Query(..., description='a name or part of one, an IPv4 address, a network or a MAC'),
+def search_get(request: Request, q: str = Query(..., description='a name or part of one, an IPv4 or IPv6 address, a network, a MAC or a DUID'),
                limit: int = Query(200, ge=1, le=5000, description='at most this many items per group'),
                user: ApiUser = Depends(api_user), conn=Depends(get_db)):
     """What the Search page shows: records in every zone (a static zone's draft when it has one, a dynamic
-    zone as its primary serves it), DHCP reservations, leases read live from Kea, zones and subnets. An
-    IPv4 address also gets `address`: its names, PTR, reservation, lease and subnet, and what doesn't add up.
+    zone as its primary serves it), DHCP and DHCPv6 reservations, leases read live from Kea, zones and subnets
+    (`family` tells a DHCPv4 subnet id from a DHCPv6 one). An address (IPv4 or IPv6) also gets `address`: its
+    names, PTR, reservation, lease and subnet, and what doesn't add up.
     Queries shorter than 3 characters skip the live reads (`skipped`)."""
     from .. import search
     res = search.search(conn, _settings(request), q, limit=limit)
@@ -740,6 +741,167 @@ def lease_delete(request: Request, ip: str, user: ApiUser = Depends(api_writer),
         raise HTTPException(status_code=502, detail=str(e))
     audit(conn, user.username, 'dhcp_lease_delete', f"{ip} on {node['name']}{_via(user)}")
     return {'ip': ip, 'node': node['name'], 'partner': partner}
+
+
+# ── DHCPv6 ─────────────────────────────────────────────────────────────────────
+
+@router.get('/dhcp6', response_model=models.Dhcp6, tags=['dhcp'], summary='DHCPv6 servers and settings')
+def dhcp6_get(user: ApiUser = Depends(api_user), conn=Depends(get_db)):
+    """Which DHCP nodes run kea-dhcp6 (a node from before 6.0 needs one Repair), each one's DHCPv6 failover state,
+    and the DHCPv6 settings every subnet starts from."""
+    from ..dhcp import apply
+    from ..dhcp.model import ha_pair, has_dhcp6, settings6
+    pair = ha_pair(conn)
+    s = settings6(conn)
+    return {'servers': [{'node': n['name'], 'runs_dhcp6': has_dhcp6(n), 'ha_state': n['dhcp6_ha_state']}
+                        for n in apply.dhcp_nodes(conn)],
+            'port6': pair.port6 if pair.active else None,
+            'settings': {'preferred_lifetime': s.preferred_lifetime, 'valid_lifetime': s.valid_lifetime,
+                         'renew_timer': s.renew_timer, 'rebind_timer': s.rebind_timer, 'options': s.options,
+                         'extra_options': s.extra_options}}
+
+
+def _subnet6(s):
+    return {'id': s.id, 'prefix': s.prefix, 'interface': s.interface, 'pools': s.pools, 'pd_pools': s.pd_pools,
+            'options': s.options, 'extra_options': s.extra_options, 'extra': s.extra,
+            'preferred_lifetime': s.preferred_lifetime, 'valid_lifetime': s.valid_lifetime,
+            'renew_timer': s.renew_timer, 'rebind_timer': s.rebind_timer, 'comment': s.comment,
+            'ddns': {'zone': s.ddns_domain, 'suffix': s.qualifying_suffix} if s.registers else None,
+            'ra': s.ra, 'ra_slaac': s.ra_slaac,
+            'reservations': [_reservation6(r) for r in sorted(s.reservations, key=_reservation6_order)]}
+
+
+def _reservation6_order(r):
+    from ..addrs import sort_key
+    return (not r.ip_address, sort_key(r.ip_address) if r.ip_address else (0, 0), r.prefix, r.duid or r.hw_address)
+
+
+def _reservation6(r):
+    return {'id': r.id, 'duid': r.duid, 'hw_address': r.hw_address, 'ip_address': r.ip_address, 'prefix': r.prefix,
+            'hostname': r.hostname, 'options': r.options, 'comment': r.comment}
+
+
+def _dhcp6_subnet(conn, subnet_id):
+    from ..dhcp.model import subnets6
+    s = next((x for x in subnets6(conn) if x.id == subnet_id), None)
+    if s is None:
+        raise HTTPException(status_code=404, detail='no such DHCPv6 subnet')
+    return s
+
+
+@router.get('/dhcp6/subnets', response_model=list[models.Subnet6], tags=['dhcp'], summary='List the DHCPv6 subnets')
+def dhcp6_subnets(user: ApiUser = Depends(api_user), conn=Depends(get_db)):
+    from ..dhcp.model import subnets6
+    return [_subnet6(s) for s in subnets6(conn)]
+
+
+@router.get('/dhcp6/subnets/{subnet_id}', response_model=models.Subnet6, tags=['dhcp'],
+            summary='Get a DHCPv6 subnet')
+def dhcp6_subnet(subnet_id: int, user: ApiUser = Depends(api_user), conn=Depends(get_db)):
+    """A subnet with its pools, delegated-prefix pools, options, router advertisement setting and reservations."""
+    return _subnet6(_dhcp6_subnet(conn, subnet_id))
+
+
+@router.get('/dhcp6/leases', response_model=models.Leases6, tags=['dhcp'], summary='List the DHCPv6 leases')
+def dhcp6_leases(request: Request, subnet: int = Query(None, description='only this DHCPv6 subnet (its id)'),
+                 user: ApiUser = Depends(api_user), conn=Depends(get_db)):
+    """Read live from kea-dhcp6: addresses, then delegated prefixes (`type`). A failover pair's come from its
+    primary, or from the standby when the primary doesn't answer."""
+    from datetime import datetime, timezone
+
+    from ..dhcp import leases
+    from ..dhcp.model import subnets6
+    found, errors = leases.serving_leases(_settings(request), conn, family=6)
+    every = {s.id: s for s in subnets6(conn)}
+
+    def reserved(lease):
+        s = every.get(lease['subnet_id'])
+        key = lease['prefix'] if lease['type'] == 'prefix' else lease['ip']
+        return bool(s) and any((key in (r.ip_address, r.prefix) and leases._matches(r, lease))
+                               or (not r.ip_address and not r.prefix and lease['type'] == 'address'
+                                   and leases._matches(r, lease)) for r in s.reservations)
+    rows = [{'ip': lease['ip'], 'type': lease['type'], 'prefix': lease['prefix'], 'duid': lease['duid'],
+             'iaid': lease['iaid'], 'mac': lease['mac'], 'hostname': lease['hostname'],
+             'subnet_id': lease['subnet_id'], 'state': lease['state'], 'expires_in': lease['expires_in'],
+             'expires': datetime.fromtimestamp(lease['expires'], timezone.utc).isoformat(timespec='seconds'),
+             'registered': lease['registered'], 'reserved': reserved(lease), 'node': node['name']}
+            for node, lease in found if subnet is None or lease['subnet_id'] == subnet]
+    return {'leases': rows, 'read_from': found[0][0]['name'] if found else None, 'errors': errors}
+
+
+def _save_reservation6(request, conn, user, subnet, r, rid):
+    from ..dhcp import ops
+    settings = _settings(request)
+    errors, warnings, _ = ops.reservation6_change(settings, conn, subnet, r, rid)
+    if errors:
+        return _reservation_invalid(errors)
+    return _dhcp_job(request, conn, lambda: ops.start_reservation6(settings, conn, r, rid, user.username, _via(user)),
+                     user, warnings)
+
+
+@router.post('/dhcp6/subnets/{subnet_id}/reservations', status_code=202, response_model=models.DhcpJob,
+             tags=['dhcp'], summary='Add a DHCPv6 reservation',
+             responses={422: {'description': 'not valid (per-field errors)'}})
+def reservation6_add(request: Request, subnet_id: int, body: models.Reservation6In,
+                     user: ApiUser = Depends(api_writer), conn=Depends(get_db)):
+    """By DUID (or MAC): an address, a delegated prefix, both, or a name only. Written to every DHCP node as a job."""
+    from ..dhcp.model import Reservation6
+    subnet = _dhcp6_subnet(conn, subnet_id)
+    r = Reservation6(None, subnet.id, body.duid.strip(), body.hw_address.strip(), body.ip_address.strip(),
+                     body.prefix.strip(), body.hostname.strip(), body.options or {}, body.comment.strip())
+    return _save_reservation6(request, conn, user, subnet, r, None)
+
+
+def _existing_reservation6(subnet, rid):
+    r = next((x for x in subnet.reservations if x.id == rid), None)
+    if r is None:
+        raise HTTPException(status_code=404, detail='no such reservation in this subnet')
+    return r
+
+
+@router.patch('/dhcp6/subnets/{subnet_id}/reservations/{reservation_id}', status_code=202,
+              response_model=models.DhcpJob, tags=['dhcp'], summary='Change a DHCPv6 reservation',
+              responses={422: {'description': 'not valid (per-field errors)'}})
+def reservation6_patch(request: Request, subnet_id: int, reservation_id: int, body: models.Reservation6Patch,
+                       user: ApiUser = Depends(api_writer), conn=Depends(get_db)):
+    """Only the fields sent change; written to every DHCP node as a job."""
+    from dataclasses import replace
+    subnet = _dhcp6_subnet(conn, subnet_id)
+    old = _existing_reservation6(subnet, reservation_id)
+    changes = {k: (v.strip() if isinstance(v, str) else v) for k, v in body.model_dump().items()
+               if k in body.model_fields_set and v is not None}
+    return _save_reservation6(request, conn, user, subnet, replace(old, **changes), reservation_id)
+
+
+@router.delete('/dhcp6/subnets/{subnet_id}/reservations/{reservation_id}', status_code=202,
+               response_model=models.DhcpJob, tags=['dhcp'], summary='Delete a DHCPv6 reservation')
+def reservation6_delete(request: Request, subnet_id: int, reservation_id: int, user: ApiUser = Depends(api_writer),
+                        conn=Depends(get_db)):
+    from ..dhcp import ops
+    r = _existing_reservation6(_dhcp6_subnet(conn, subnet_id), reservation_id)
+    settings = _settings(request)
+    return _dhcp_job(request, conn,
+                     lambda: ops.start_reservation6_delete(settings, conn, r, user.username, _via(user)), user)
+
+
+@router.delete('/dhcp6/leases/{ip:path}', response_model=models.Lease6Deleted, tags=['dhcp'],
+               summary='Delete a DHCPv6 lease')
+def lease6_delete(request: Request, ip: str, user: ApiUser = Depends(api_writer), conn=Depends(get_db)):
+    """An address, or a delegated prefix as `prefix/len`. At once, on the server that holds it and its failover
+    partner; its DNS names go with it."""
+    from ..dhcp import leases, ops
+    found, errors = leases.serving_leases(_settings(request), conn, family=6)
+    kind = 'prefix' if '/' in ip else 'address'
+    node = next((n for n, lease in found if (lease['prefix'] if kind == 'prefix' else lease['ip']) == ip
+                 and lease['type'] == kind), None)
+    if node is None:
+        raise HTTPException(status_code=404, detail=f'no lease on {ip}' + (f" ({'; '.join(errors)})" if errors else ''))
+    try:
+        partner = ops.delete_lease6(_settings(request), conn, node, ip, kind)
+    except leases.LeaseError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    audit(conn, user.username, 'dhcp_lease_delete', f"{ip} on {node['name']}{_via(user)}")
+    return {'ip': ip, 'type': kind, 'node': node['name'], 'partner': partner}
 
 
 # ── time ───────────────────────────────────────────────────────────────────────

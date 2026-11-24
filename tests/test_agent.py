@@ -47,6 +47,7 @@ def fake_root(tmp_path, monkeypatch):
         f'include "{bind}/named.conf.default-zones";\n'
         f'include "{bind}/named.conf.liteblox";\n')
     (bind / 'rndc.key').write_text('key "rndc-key" { algorithm hmac-sha256; secret "c2VjcmV0"; };\n')
+    (bind / 'named.conf.liteblox').write_text('// the include must exist: named-checkconf fails on a missing one\n')
     (bind / 'named.conf.local').write_text(
         f'zone "example.com" {{ type master; file "{bind}/db.example.com"; }};\n'
         f'zone "rel.example" {{ type primary; file "db.rel"; }};   # relative to directory\n'
@@ -345,6 +346,7 @@ def stock_root(fake_root):
                                      f'include "{bind}/named.conf.default-zones";\n')
     (bind / 'named.conf.options').write_text(f'options {{ directory "{fake_root}/var/cache/bind"; }};\n')
     (bind / 'named.conf.local').write_text('// Do any local configuration here\n')
+    (bind / 'named.conf.liteblox').unlink()
     return fake_root
 
 
@@ -801,3 +803,18 @@ def test_no_upgrade_while_a_change_is_staged(upgradable, server, client):
 def test_started_ok_names_the_running_agent(server, fake_root):
     server.agent.mark_started()
     assert (fake_root / 'state' / 'started-ok').read_text().strip() == agent_sha256()
+
+
+def test_a_config_whose_distro_include_vanished_can_be_rewritten(client, stock_root):
+    """An OS upgrade removes named.conf.default-zones (Ubuntu 26.04): the live config fails named-checkconf, the
+    status says so and which distro files are left, and a new set without the include goes through."""
+    take_over(client, stock_root)
+    bind = stock_root / 'etc/bind'
+    assert client.status()['distro_includes'] == [str(bind / 'named.conf.default-zones')]
+    (bind / 'named.conf.default-zones').unlink()
+    s = client.status()
+    assert s['checkconf_ok'] is False and s['distro_includes'] == [] and s['taken_over']
+    fixed = render(NodeConfig(options=NodeOptions(), distro_includes=[]), fake_layout(stock_root))
+    staged = client.stage_config(fixed)
+    client.commit_config(staged['stage_id'])
+    assert 'default-zones' not in (bind / 'named.conf').read_text() and client.status()['checkconf_ok'] is True

@@ -190,6 +190,16 @@ def _is_v4(text):
         return False
 
 
+def _all_networks(iface):
+    """Every address of an interface, both families, but not link-local (every IPv6 interface has fe80::)."""
+    out = []
+    for cidr in iface.get('addresses') or []:
+        net = ipaddress.ip_interface(cidr)
+        if not net.is_link_local:
+            out.append(net)
+    return out
+
+
 def check_interfaces(node, chosen, available, others_serving):
     """Errors for serving `chosen` interface names on `node`, given the node's live interfaces and
     the other nodes already serving some (one serving node until failover pairs arrive)."""
@@ -199,7 +209,7 @@ def check_interfaces(node, chosen, available, others_serving):
     if unknown:
         errors['interfaces'] = f"{', '.join(unknown)}: not an interface on {node['name']}"
     for c in chosen:
-        for a in interface_networks(names.get(c, {})):
+        for a in _all_networks(names.get(c, {})):
             taken = _overlaps_never(a.network)
             if taken:
                 errors['interfaces'] = (f'{c} ({a}) is on {taken}, which this development instance never serves')
@@ -215,17 +225,24 @@ def guard_rendered(files):
     if not never:
         return
     body = json.loads(files['kea-dhcp4.conf'])['Dhcp4']
-    for sub in body.get('subnet4', []):
+    body6 = json.loads(files['kea-dhcp6.conf'])['Dhcp6'] if 'kea-dhcp6.conf' in files else {}
+    for sub in body.get('subnet4', []) + body6.get('subnet6', []):
         net = ipaddress.ip_network(sub['subnet'])
-        if any(n.overlaps(net) for n in never):
+        if any(n.version == net.version and n.overlaps(net) for n in never):
             raise Invalid({'subnet': f"refusing to write {sub['subnet']}: this development instance never serves it"})
-    for hook in body.get('hooks-libraries', []):
+    for hook in body.get('hooks-libraries', []) + body6.get('hooks-libraries', []):
         for ha in (hook.get('parameters') or {}).get('high-availability', []):
             for peer in ha.get('peers', []):
                 host = peer['url'].split('//', 1)[1].rsplit(':', 1)[0]
                 if any(n.overlaps(ipaddress.ip_network(f'{host}/32')) for n in never):
                     raise Invalid({'ha': f"refusing a failover listener on {host}: this development instance never "
                                          'serves that network'})
+    from .render import radvd_prefixes
+    for prefix in radvd_prefixes(files.get('radvd.conf', '')):
+        net = ipaddress.ip_network(prefix)
+        if any(n.version == 6 and n.overlaps(net) for n in never):
+            raise Invalid({'ra': f'refusing router advertisements for {prefix}: this development instance never '
+                                 'serves it'})
 
 
 def parse_options(form, prefix=''):
@@ -288,7 +305,8 @@ def _check_external(subnet, dhcp_settings):
     bad = [z for z in zones if reverse_network(z.rstrip('.')) is None or
            not reverse_network(z.rstrip('.')).overlaps(network)]
     if bad:
-        errors['ddns_reverse'] = f"{', '.join(bad)}: a reverse zone (…in-addr.arpa) that covers part of {subnet.prefix}"
+        kind = 'ip6.arpa' if network.version == 6 else 'in-addr.arpa'
+        errors['ddns_reverse'] = f"{', '.join(bad)}: a reverse zone (…{kind}) that covers part of {subnet.prefix}"
     subnet.ddns_reverse = ' '.join(z.rstrip('.') for z in zones)
     if not dhcp_settings.ddns_server or not dhcp_settings.ddns_external_key:
         errors['ddns'] = 'set the DNS server and its key first (DHCP → Settings → DNS registration)'
@@ -308,7 +326,7 @@ def _covers(grant, zone, owner):
 def missing_grants(conn, key_name, subnet, reverse_zones):
     """[(zone, scope, owner, types)] the DDNS key still needs for this subnet's registrations.
 
-    Forward: A and DHCID for names under the suffix (AAAA too, for later); reverse: PTR and DHCID.
+    Forward: A (AAAA for a DHCPv6 subnet) and DHCID for names under the suffix; reverse: PTR and DHCID.
     """
     if not key_name or not subnet.ddns or not subnet.ddns_zone or subnet.ddns_mode != 'liteblox':
         return []
@@ -318,7 +336,7 @@ def missing_grants(conn, key_name, subnet, reverse_zones):
     suffix = subnet.qualifying_suffix
     probe = dns.name.from_text('host.' + suffix + '.')        # a name a client would get
     out = []
-    wants = [(subnet.ddns_zone, probe, ('A', 'DHCID'),
+    wants = [(subnet.ddns_zone, probe, ('AAAA', 'DHCID') if getattr(subnet, 'family', 4) == 6 else ('A', 'DHCID'),
               ('zonesub', '', 'A AAAA DHCID') if suffix == subnet.ddns_zone else ('subdomain', suffix, 'A AAAA DHCID'))]
     for zone in reverse_zones:
         wants.append((zone, dns.name.from_text('1.' + zone + '.'), ('PTR', 'DHCID'), ('zonesub', '', 'PTR DHCID')))
@@ -429,7 +447,7 @@ def match_interfaces(primary, standby, primary_live, standby_live, served):
     return mapping, '; '.join(problems) or None
 
 
-def check_pair(primary, standby, primary_address, standby_address, port, live, served):
+def check_pair(primary, standby, primary_address, standby_address, port, live, served, port6=8002):
     """Errors for pairing `primary` with `standby` (node rows). live: {node id: its interfaces from the agent};
     served: the interface names the primary serves on (the standby needs one on each of their networks)."""
     errors = {}
@@ -440,6 +458,10 @@ def check_pair(primary, standby, primary_address, standby_address, port, live, s
             errors['nodes'] = f"{node['name']} doesn't run Kea yet (its page → Set up DHCP)"
     if not isinstance(port, int) or not 1024 <= port <= 65535:
         errors['port'] = 'a TCP port from 1024 to 65535'
+    if not isinstance(port6, int) or not 1024 <= port6 <= 65535:
+        errors['port6'] = 'a TCP port from 1024 to 65535'
+    elif port6 == port:
+        errors['port6'] = "DHCPv6's failover needs a port of its own (kea-dhcp4 listens on the other)"
     for node, address, key in ((primary, primary_address, 'primary_address'),
                                (standby, standby_address, 'standby_address')):
         mine = [a.ip for i in live.get(node['id']) or [] for a in interface_networks(i)]

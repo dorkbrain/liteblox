@@ -8,10 +8,10 @@ import pytest
 from liteblox import db, status
 from liteblox.dhcp import leases as lease_mod
 from liteblox.dhcp import store
-from liteblox.dhcp.model import Reservation, Subnet
+from liteblox.dhcp.model import Reservation, Reservation6, Subnet, Subnet6
 from liteblox.dns import reclaim
 
-from test_dynamic import dyn, ptr_zones, server, zone_row  # noqa: F401 (fixtures)
+from test_dynamic import dyn, ok_verify, ptr_zones, server, zone_row  # noqa: F401 (fixtures)
 from test_ptr import admin  # noqa: F401 (fixture)
 from test_managed import lab  # noqa: F401 (fixture)
 
@@ -46,8 +46,8 @@ def names(conn, settings, ptr_zones, monkeypatch):  # noqa: F811
     class Live:
         leases, errors = [], []
     live = Live()
-    node = {'id': 1, 'name': 'ns1'}
-    monkeypatch.setattr(lease_mod, 'serving_leases', lambda s, c: ([(node, x) for x in live.leases], live.errors))
+    node = {'id': 1, 'name': 'ns1', 'dhcp6': 1}
+    monkeypatch.setattr(lease_mod, 'serving_leases', lambda s, c, family=4: ([(node, x) for x in live.leases if (':' in x['ip']) == (family == 6)], live.errors))
     monkeypatch.setattr(lease_mod, 'serving', lambda c: [node])
     live.server = server
     return live
@@ -56,7 +56,7 @@ def names(conn, settings, ptr_zones, monkeypatch):  # noqa: F811
 def items(conn, settings, now=NOW, notice=True):
     from liteblox.dns import editing
     edit = editing.ZoneEdit(settings, conn, 'dyn.lab')
-    found, _ = lease_mod.serving_leases(settings, conn)
+    found, _ = reclaim.all_leases(settings, conn)
     return {i['fqdn']: i for i in reclaim.review(conn, settings, zone_row(conn, 'dyn.lab'), edit.zone, found,
                                                  now=now, notice=notice)}
 
@@ -189,6 +189,140 @@ def test_remember_keeps_the_newest_expiry(conn, settings):
     reclaim.remember(conn, [(None, lease('192.168.0.9', 'a.lab.', NOW + 100))])
     reclaim.remember(conn, [(None, lease('192.168.0.9', 'A.lab', NOW - 100))])
     assert conn.execute('SELECT last_expiry FROM ddns_names').fetchall()[0][0] == NOW + 100
+
+
+# ── IPv6 and stale PTRs ────────────────────────────────────────────────────────
+
+REV6 = '0.0.1.0.2.0.0.0.1.0.0.0.0.0.d.f.ip6.arpa'
+NIB = '0.0.0.0.0.0.0.0.0.0.0.0.0.0'        # the host part of fd00:1:2:100::XY before its last two nibbles
+
+
+def lease6(ip, hostname, expires, state='active', kind='address'):
+    return {'ip': ip, 'type': kind, 'duid': '00:01:aa:bb', 'mac': '', 'hostname': hostname, 'subnet_id': 1,
+            'state': state, 'expires': expires, 'expires_in': expires - NOW, 'registered': True}
+
+
+@pytest.fixture
+def names6(conn, settings, names):
+    """names, plus a DHCPv6 subnet and the /64's dynamic reverse zone. dual.dyn.lab is Kea's with .66 and ::66
+    (both PTRs Kea's). Stale-PTR material: ::77 -> kea1 and .69 -> kea2 (neither has that address any more)."""
+    from liteblox.dns import declare
+    server = names.server
+    store.save_subnet6(conn, Subnet6(1, 'fd00:1:2:100::/64', 'ens19'))
+    rev6 = f'$TTL 3600\n@\tIN\tSOA\tns1.dyn.lab. hostmaster.dyn.lab. 1 3600 900 1209600 300\n@\tIN\tNS\tns1.dyn.lab.\n'
+    declare.create_zone(settings, REV6, ['1', '2'], rev6, 'admin', print, verify=ok_verify)
+    server.load(REV6, rev6)
+    declare.set_dynamic(settings, REV6, True, 'admin', print, verify=ok_verify)
+    server.load('dyn.lab', server.text('dyn.lab') + kea('dual', '192.168.0.66')
+                + 'dual\t300\tIN\tAAAA\tfd00:1:2:100::66\n')
+    server.load(REV, server.text(REV) + kea_ptr(66, 'dual.dyn.lab') + kea_ptr(69, 'kea2.dyn.lab'))
+    server.load(REV6, server.text(REV6) + kea_ptr(f'6.6.{NIB}', 'dual.dyn.lab') + kea_ptr(f'7.7.{NIB}', 'kea1.dyn.lab'))
+    # kea1..kea4 have live leases, so only what a test changes goes stale
+    names.leases = [lease(f'192.168.0.6{n}', f'kea{n}.dyn.lab', NOW + 99999) for n in (1, 2, 3, 4)]
+    return names
+
+
+def ptrs(conn, settings, now=NOW, notice=True):
+    from liteblox.dns import editing
+    edit = editing.ZoneEdit(settings, conn, 'dyn.lab')
+    found, _ = reclaim.all_leases(settings, conn)
+    got, total = reclaim.review_ptrs(settings, conn, zone_row(conn, 'dyn.lab'), edit.zone, found, now=now, notice=notice)
+    return {i['address']: i for i in got}, total
+
+
+def test_a_dual_stack_name_and_its_ipv6_lease(conn, settings, names6):
+    names6.leases.append(lease6('fd00:1:2:100::66', 'dual.dyn.lab', NOW + 600))
+    got = items(conn, settings)
+    assert got['dual.dyn.lab']['addresses'] == ['192.168.0.66', 'fd00:1:2:100::66']
+    assert got['dual.dyn.lab']['why'] == 'a live lease'
+    names6.leases.pop()
+    store.save_reservation6(conn, Reservation6(None, 1, duid='00:01:aa:bb', ip_address='fd00:1:2:100::66'))
+    assert items(conn, settings)['dual.dyn.lab']['why'] == 'reserved'
+    with conn:
+        conn.execute('DELETE FROM dhcp6_reservations')
+    items(conn, settings)                                                           # its clock starts
+    assert items(conn, settings, now=NOW + 7201)['dual.dyn.lab']['stale']
+    lines = reclaim.delete(settings, conn, 'dyn.lab', ['dual.dyn.lab'], 'admin')
+    assert 'dual' not in names6.server.text('dyn.lab')
+    assert not re.search(r'^66\s', names6.server.text(REV), re.M)
+    assert not re.search(r'^6\.6\.0', names6.server.text(REV6), re.M)
+    assert 'removed the PTR for fd00:1:2:100::66 from ' + REV6 in lines
+
+
+def test_remember_takes_ipv6_leases(conn, settings):
+    reclaim.remember(conn, [(None, lease6('fd00:1:2:100::66', 'dual.lab', NOW + 100))])
+    reclaim.remember(conn, [(None, lease('192.168.0.66', 'dual.lab', NOW + 50))])
+    assert tuple(conn.execute('SELECT address, last_expiry FROM ddns_names').fetchone()) == ('fd00:1:2:100::66', NOW + 100)
+
+
+def test_stale_ptrs_are_found_and_reclaimed(conn, settings, names6):
+    names6.leases.append(lease('192.168.0.66', 'dual.dyn.lab', NOW + 99999))
+    got, total = ptrs(conn, settings)
+    # Kea's PTRs into dyn.lab: .61 .62 .66 .69 and ::66 ::77 (.63 points elsewhere)
+    assert total == 6 and sorted(got) == ['192.168.0.69', 'fd00:1:2:100::77']
+    assert not got['fd00:1:2:100::77']['stale'] and 'kea1.dyn.lab has no record for it' in got['fd00:1:2:100::77']['why']
+    got, _ = ptrs(conn, settings, now=NOW + 7201)
+    assert all(i['stale'] for i in got.values())
+    names6.leases.append(lease('192.168.0.69', 'someone.dyn.lab', NOW + 99999))
+    assert ptrs(conn, settings, now=NOW + 7201)[0]['192.168.0.69']['why'] == 'a live lease has its address'
+    names6.leases.pop()
+    log = []
+    gone = reclaim.run_pass(settings, conn, zone_row(conn, 'dyn.lab'), log.append, now=NOW + 7201)
+    assert gone == ['69.0.168.192.in-addr.arpa', f'7.7.{NIB}.{REV6}']
+    rev, rev6 = names6.server.text(REV), names6.server.text(REV6)
+    assert not re.search(r'^69\s', rev, re.M) and re.search(r'^6[126]\s.*PTR', rev, re.M)
+    assert not re.search(r'^7\.7\.0', rev6, re.M) and re.search(r'^6\.6\.0.*PTR', rev6, re.M)
+    assert 'kea1' in names6.server.text('dyn.lab')                                    # the names stay
+    assert any('removed the stale PTR for fd00:1:2:100::77' in line for line in log)
+    assert conn.execute("SELECT detail FROM audit WHERE action = 'ddns_reclaim'").fetchone()[0] == (
+        'dyn.lab: the PTR for 192.168.0.69 (kea2.dyn.lab), the PTR for fd00:1:2:100::77 (kea1.dyn.lab)')
+    assert conn.execute("SELECT COUNT(*) FROM ddns_names WHERE name LIKE '%.arpa'").fetchone()[0] == 0
+
+
+def test_a_ptr_that_matches_again_restarts_its_clock(conn, settings, names6):
+    ptrs(conn, settings)
+    names6.server.load('dyn.lab', names6.server.text('dyn.lab') + 'kea2\t300\tIN\tA\t192.168.0.69\n')
+    assert '192.168.0.69' not in ptrs(conn, settings, now=NOW + 100)[0]
+    names6.server.load('dyn.lab', re.sub(r'^kea2\s.*192\.168\.0\.69\n', '', names6.server.text('dyn.lab'), flags=re.M))
+    got, _ = ptrs(conn, settings, now=NOW + 7201)
+    assert not got['192.168.0.69']['stale'] and got['fd00:1:2:100::77']['stale']
+
+
+def test_too_many_stale_ptrs_hold_the_pass(conn, settings, names6):
+    names6.leases.append(lease('192.168.0.66', 'dual.dyn.lab', NOW + 99999))
+    names6.server.load(REV, names6.server.text(REV) + kea_ptr(70, 'kea3.dyn.lab') + kea_ptr(71, 'kea4.dyn.lab'))
+    ptrs(conn, settings)
+    assert reclaim.run_pass(settings, conn, zone_row(conn, 'dyn.lab'), print, now=NOW + 7201) == []
+    assert zone_row(conn, 'dyn.lab')['reclaim_note'].startswith('hold: 4 of the 8 PTR records DHCP made')
+
+
+def test_dhcpv6_trouble_holds_the_pass(conn, settings, names6):
+    with conn:
+        conn.execute("UPDATE nodes SET dhcp = 1, dhcp6 = 1, dhcp6_sockets = ? WHERE name = 'ns1'", ('{"status": "failed"}',))
+    assert reclaim.dhcp_trouble(conn) == "ns1: Kea isn't serving DHCPv6"
+    with conn:
+        conn.execute("UPDATE nodes SET dhcp6_sockets = NULL, dhcp6_ha_state = 'partner-down'")
+    assert reclaim.dhcp_trouble(conn) is None                                   # no pair
+    with conn:
+        conn.execute('DELETE FROM dhcp6_subnets')
+        conn.execute("UPDATE nodes SET dhcp6_sockets = '{}'")
+    assert reclaim.dhcp_trouble(conn) is None                                   # no v6 served: not asked
+
+
+def test_the_zone_page_shows_and_deletes_stale_ptrs(admin, conn, settings, names6):  # noqa: F811
+    ptrs(conn, settings, now=int(time.time()) - 8000)
+    page = admin.get('/zones/dyn.lab?stale=1').text
+    assert 'PTR records without a name' in page and f'value="7.7.{NIB}.{REV6}"' in page
+    r = admin.post('/zones/dyn.lab/stale', data={'ptrs': [f'7.7.{NIB}.{REV6}']}, follow_redirects=False)
+    assert r.status_code == 303 and 'done=1%20stale%20PTR%20record%20removed' in r.headers['location']
+    assert not re.search(r'^7\.7\.0', names6.server.text(REV6), re.M)
+    assert re.search(r'^69\s', names6.server.text(REV), re.M)
+    # a PTR whose name got its address back isn't deleted
+    names6.server.load('dyn.lab', names6.server.text('dyn.lab') + 'kea2\t300\tIN\tA\t192.168.0.69\n')
+    r = admin.post('/zones/dyn.lab/stale', data={'ptrs': ['69.0.168.192.in-addr.arpa']}, follow_redirects=False)
+    assert re.search(r'^69\s', names6.server.text(REV), re.M) and 'no%20PTR%20record%20removed' in r.headers['location']
+    assert [r[0] for r in conn.execute("SELECT detail FROM audit WHERE action = 'ddns_delete'")] == [
+        f'dyn.lab: the stale PTR for fd00:1:2:100::77 from {REV6}']
 
 
 # ── the pages ──────────────────────────────────────────────────────────────────
